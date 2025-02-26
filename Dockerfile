@@ -35,6 +35,15 @@ LABEL org.opencontainers.image.title="Remote docker" \
     com.docker.extension.categories="" \
     com.docker.extension.changelog=""
 
+# Install SSH client
+RUN apk add --no-cache openssh-client docker
+
+# Install ca-certificates for Docker client
+RUN apk add --no-cache ca-certificates
+
+# Create necessary SSH directories
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
+
 COPY --from=builder /backend/bin/service /
 COPY docker-compose.yaml .
 COPY metadata.json .
