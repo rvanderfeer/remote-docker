@@ -52,6 +52,7 @@ type DockerContainer struct {
 	Name   string `json:"name"`
 	Image  string `json:"image"`
 	Status string `json:"status"`
+	Ports  string `json:"ports"`
 }
 
 // Settings data file path
@@ -1181,8 +1182,9 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// Format the docker command
-	dockerCommand := "docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}'"
+	// Format the docker command to include port information
+	// The --format option with '{{.Ports}}' will get the port bindings
+	dockerCommand := "docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'"
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1204,7 +1206,7 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		}
 
 		parts := strings.Split(line, "|")
-		if len(parts) != 4 {
+		if len(parts) != 5 {
 			logger.Errorf("Invalid format for container info: %s", line)
 			continue
 		}
@@ -1214,12 +1216,14 @@ func connectToRemoteDocker(ctx echo.Context) error {
 			Name:   parts[1],
 			Image:  parts[2],
 			Status: parts[3],
+			Ports:  parts[4],
 		}
 		containers = append(containers, container)
 	}
 
 	return ctx.JSON(http.StatusOK, containers)
 }
+
 func listen(path string) (net.Listener, error) {
 	return net.Listen("unix", path)
 }

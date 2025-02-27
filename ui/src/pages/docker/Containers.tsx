@@ -15,22 +15,32 @@ import {
   IconButton,
   Tooltip,
   Chip,
-  Drawer
+  Drawer,
+  Stack
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import PortIcon from '@mui/icons-material/Devices';
 import { Environment, ExtensionSettings } from '../../App';
 import AutoRefreshControls from '../../components/AutoRefreshControls';
 import ContainerLogs from './ContainerLogs';
 import ConfirmationDialog from '../../components/ConfirmationDialog';
 
-// Container interface
+// Extended Container interface with ports
 interface Container {
   id: string;
   name: string;
   image: string;
   status: string;
+  ports?: string;  // Raw ports string from Docker
+}
+
+// Parsed port binding type
+interface PortBinding {
+  hostPort: string;
+  containerPort: string;
+  protocol: string;
 }
 
 // Error response interface
@@ -123,6 +133,54 @@ const Containers: React.FC<ContainersProps> = ({
     };
   }, []);
 
+  // Parse port bindings from Docker format
+  const parsePortBindings = (portsString: string | undefined): PortBinding[] => {
+    if (!portsString || portsString.trim() === '') return [];
+
+    // Common Docker port formats:
+    // "0.0.0.0:8080->80/tcp, :::8080->80/tcp"
+    // "80/tcp, 443/tcp"
+
+    const portBindings: PortBinding[] = [];
+
+    try {
+      const portMappings = portsString.split(', ');
+
+      portMappings.forEach(mapping => {
+        // Check if there's a host port mapping
+        if (mapping.includes('->')) {
+          // Format: "0.0.0.0:8080->80/tcp" or ":::8080->80/tcp"
+          const [hostPart, containerPart] = mapping.split('->');
+
+          // Extract the host port, which comes after the last colon
+          const hostPort = hostPart.substring(hostPart.lastIndexOf(':') + 1);
+
+          // Extract container port and protocol
+          const [containerPort, protocol] = containerPart.split('/');
+
+          portBindings.push({
+            hostPort,
+            containerPort,
+            protocol: protocol || 'tcp'
+          });
+        } else if (mapping.includes('/')) {
+          // Format: "80/tcp" (exposed port without host binding)
+          const [containerPort, protocol] = mapping.split('/');
+
+          portBindings.push({
+            hostPort: '',
+            containerPort,
+            protocol: protocol || 'tcp'
+          });
+        }
+      });
+    } catch (err) {
+      console.error('Error parsing port bindings:', err);
+    }
+
+    return portBindings;
+  };
+
   // Load containers from the active environment
   const loadContainers = async () => {
     if (!activeEnvironment) {
@@ -160,6 +218,10 @@ const Containers: React.FC<ContainersProps> = ({
 
       // Cast response to Container array
       const containerData = response as Container[];
+
+      // If ports field is missing, we need to fetch it separately
+      // This can be adjusted based on your backend implementation
+
       setContainers(containerData);
       setLastRefreshTime(new Date()); // Update last refresh time
       console.log('Containers loaded:', containerData);
@@ -290,6 +352,35 @@ const Containers: React.FC<ContainersProps> = ({
     setConfirmDialogOpen(true);
   };
 
+  // Render port bindings for a container
+  const renderPortBindings = (container: Container) => {
+    const portBindings = parsePortBindings(container.ports);
+
+    if (portBindings.length === 0) {
+      return <Typography variant="body2" color="text.secondary">None</Typography>;
+    }
+
+    return (
+      <Stack direction="row" spacing={1} flexWrap="wrap">
+        {portBindings.map((binding, index) => (
+          <Chip
+            key={index}
+            size="small"
+            icon={<PortIcon />}
+            label={
+              binding.hostPort
+                ? `${binding.hostPort}:${binding.containerPort}/${binding.protocol}`
+                : `${binding.containerPort}/${binding.protocol}`
+            }
+            variant="outlined"
+            color="info"
+            sx={{ my: 0.5 }}
+          />
+        ))}
+      </Stack>
+    );
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -356,10 +447,11 @@ const Containers: React.FC<ContainersProps> = ({
             <Table sx={{ minWidth: 650 }}>
               <TableHead>
                 <TableRow>
-                  <TableCell width="15%">Container ID</TableCell>
-                  <TableCell width="25%">Name</TableCell>
-                  <TableCell width="30%">Image</TableCell>
-                  <TableCell width="20%">Status</TableCell>
+                  <TableCell width="10%">Container ID</TableCell>
+                  <TableCell width="15%">Name</TableCell>
+                  <TableCell width="20%">Image</TableCell>
+                  <TableCell width="15%">Status</TableCell>
+                  <TableCell width="30%">Ports</TableCell>
                   <TableCell width="10%" align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
@@ -378,6 +470,9 @@ const Containers: React.FC<ContainersProps> = ({
                         size="small"
                         variant="outlined"
                       />
+                    </TableCell>
+                    <TableCell>
+                      {renderPortBindings(container)}
                     </TableCell>
                     <TableCell align="right">
                       <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
