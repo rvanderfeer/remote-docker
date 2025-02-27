@@ -11,13 +11,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/sirupsen/logrus"
 )
 
-var logger = logrus.New()
+var (
+	logger        = logrus.New()
+	tunnelManager *SSHTunnelManager
+)
+
+// SSH tunnel manager that maintains persistent connections
+type SSHTunnelManager struct {
+	activeConnections map[string]*SSHConnection
+	mutex             sync.Mutex
+	controlDir        string
+}
+
+// SSH connection information
+type SSHConnection struct {
+	Username    string
+	Hostname    string
+	ControlPath string
+	Cmd         *exec.Cmd
+	LastUsed    time.Time
+	Active      bool
+}
 
 type SSHConnectionRequest struct {
 	Hostname string `json:"hostname"`
@@ -42,6 +64,16 @@ func main() {
 	_ = os.RemoveAll(socketPath)
 
 	logger.SetOutput(os.Stdout)
+
+	// Initialize SSH tunnel manager
+	var err error
+	tunnelManager, err = NewSSHTunnelManager()
+	if err != nil {
+		logger.Fatalf("Failed to initialize SSH tunnel manager: %v", err)
+	}
+
+	// Start cleanup routine for idle connections (check every minute, timeout after 30 minutes)
+	tunnelManager.StartCleanupRoutine(1*time.Minute, 30*time.Minute)
 
 	logMiddleware := middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Skipper: middleware.DefaultSkipper,
@@ -71,6 +103,12 @@ func main() {
 	router.GET("/settings", getSettings)
 	// Save settings
 	router.POST("/settings", saveSettings)
+
+	router.POST("/tunnel/open", openTunnel)
+	router.POST("/tunnel/close", closeTunnel)
+	router.GET("/tunnel/status", getTunnelStatus)
+	router.GET("/tunnel/list", listTunnels)
+
 	// Container management endpoints
 	router.POST("/container/start", startContainer)
 	router.POST("/container/stop", stopContainer)
@@ -86,8 +124,399 @@ func main() {
 	router.POST("/networks/list", listNetworks)
 	router.POST("/networks/remove", removeNetwork)
 
+	// Graceful shutdown handling
+	c := make(chan os.Signal, 1)
+	go func() {
+		<-c
+		logger.Info("Shutting down, closing all SSH connections...")
+		tunnelManager.CloseAllConnections()
+		os.Exit(0)
+	}()
+
 	logger.Fatal(router.Start(startURL))
 }
+
+// Create a new SSH tunnel manager
+func NewSSHTunnelManager() (*SSHTunnelManager, error) {
+	// Create directory for SSH control sockets
+	controlDir := "/tmp/docker-remote-ssh"
+	if err := os.MkdirAll(controlDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create control directory: %v", err)
+	}
+
+	return &SSHTunnelManager{
+		activeConnections: make(map[string]*SSHConnection),
+		controlDir:        controlDir,
+	}, nil
+}
+
+// Generate connection key for mapping
+func connectionKey(username, hostname string) string {
+	return fmt.Sprintf("%s@%s", username, hostname)
+}
+
+// Create and start a new SSH connection
+func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	key := connectionKey(username, hostname)
+
+	// Check if connection already exists
+	if conn, exists := m.activeConnections[key]; exists && conn.Active {
+		// Update last used time
+		conn.LastUsed = time.Now()
+		logger.Infof("Reusing existing SSH connection for %s", key)
+		return nil
+	}
+
+	// Create control socket path
+	controlPath := filepath.Join(m.controlDir, fmt.Sprintf("ssh-%s.sock", key))
+
+	// Remove existing control socket if it exists
+	if _, err := os.Stat(controlPath); err == nil {
+		if err := os.Remove(controlPath); err != nil {
+			logger.Warnf("Failed to remove existing control socket: %v", err)
+		}
+	}
+
+	// Start SSH master connection with control socket
+	cmd := exec.Command("ssh",
+		"-M",              // Master mode for connection sharing
+		"-S", controlPath, // Control socket path
+		"-o", "ControlPersist=yes",
+		"-o", "ServerAliveInterval=60",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "BatchMode=yes", // Non-interactive mode
+		"-N", // Don't execute any command, just forward
+		fmt.Sprintf("%s@%s", username, hostname),
+	)
+
+	// Start the SSH connection
+	logger.Infof("Starting new SSH master connection for %s", key)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start SSH connection: %v", err)
+	}
+
+	// Wait a moment for connection to establish
+	time.Sleep(1 * time.Second)
+
+	// Check if connection was successful by running a test command
+	testCmd := exec.Command("ssh",
+		"-S", controlPath,
+		"-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", username, hostname),
+		"echo 'Connection test'",
+	)
+
+	output, err := testCmd.CombinedOutput()
+	if err != nil {
+		// Try to kill the master connection if test failed
+		cmd.Process.Kill()
+		return fmt.Errorf("failed to establish SSH connection: %v, output: %s", err, string(output))
+	}
+
+	// Store the connection
+	m.activeConnections[key] = &SSHConnection{
+		Username:    username,
+		Hostname:    hostname,
+		ControlPath: controlPath,
+		Cmd:         cmd,
+		LastUsed:    time.Now(),
+		Active:      true,
+	}
+
+	logger.Infof("Successfully established SSH connection for %s", key)
+	return nil
+}
+
+// Close a specific SSH connection
+func (m *SSHTunnelManager) CloseConnection(username, hostname string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	key := connectionKey(username, hostname)
+	conn, exists := m.activeConnections[key]
+	if !exists || !conn.Active {
+		return nil // Connection doesn't exist or is already closed
+	}
+
+	// Close the connection using control socket
+	closeCmd := exec.Command("ssh",
+		"-S", conn.ControlPath,
+		"-O", "exit", // Send exit command to master process
+		fmt.Sprintf("%s@%s", username, hostname),
+	)
+
+	logger.Infof("Closing SSH connection for %s", key)
+	output, err := closeCmd.CombinedOutput()
+	if err != nil {
+		logger.Warnf("Error closing SSH connection cleanly: %v, output: %s", err, string(output))
+		// Try to kill the process directly if clean exit fails
+		if conn.Cmd != nil && conn.Cmd.Process != nil {
+			conn.Cmd.Process.Kill()
+		}
+	}
+
+	// Clean up the control socket
+	if _, err := os.Stat(conn.ControlPath); err == nil {
+		if err := os.Remove(conn.ControlPath); err != nil {
+			logger.Warnf("Failed to remove control socket: %v", err)
+		}
+	}
+
+	// Mark as inactive and remove from map
+	conn.Active = false
+	delete(m.activeConnections, key)
+
+	return nil
+}
+
+// Close all active SSH connections
+func (m *SSHTunnelManager) CloseAllConnections() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	for key, conn := range m.activeConnections {
+		if conn.Active {
+			// Close the connection using control socket
+			closeCmd := exec.Command("ssh",
+				"-S", conn.ControlPath,
+				"-O", "exit",
+				fmt.Sprintf("%s@%s", conn.Username, conn.Hostname),
+			)
+
+			logger.Infof("Closing SSH connection for %s", key)
+			output, err := closeCmd.CombinedOutput()
+			if err != nil {
+				logger.Warnf("Error closing SSH connection cleanly: %v, output: %s", err, string(output))
+				// Try to kill the process directly
+				if conn.Cmd != nil && conn.Cmd.Process != nil {
+					conn.Cmd.Process.Kill()
+				}
+			}
+
+			// Clean up control socket
+			if _, err := os.Stat(conn.ControlPath); err == nil {
+				os.Remove(conn.ControlPath)
+			}
+		}
+	}
+
+	// Clear the map
+	m.activeConnections = make(map[string]*SSHConnection)
+}
+
+// Execute a command using an existing SSH connection
+func (m *SSHTunnelManager) ExecuteCommand(username, hostname, command string) ([]byte, error) {
+	m.mutex.Lock()
+	key := connectionKey(username, hostname)
+	conn, exists := m.activeConnections[key]
+
+	if !exists || !conn.Active {
+		// No active connection, try to open one
+		m.mutex.Unlock()
+		if err := m.OpenConnection(username, hostname); err != nil {
+			return nil, fmt.Errorf("failed to open connection: %v", err)
+		}
+		m.mutex.Lock()
+		conn = m.activeConnections[key]
+	}
+
+	// Update last used time
+	conn.LastUsed = time.Now()
+	controlPath := conn.ControlPath
+	m.mutex.Unlock()
+
+	// Execute command using the control socket
+	cmd := exec.Command("ssh",
+		"-S", controlPath,
+		"-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", username, hostname),
+		command,
+	)
+
+	// Run the command and return output
+	return cmd.CombinedOutput()
+}
+
+// Check if connection is active
+func (m *SSHTunnelManager) IsConnectionActive(username, hostname string) bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	key := connectionKey(username, hostname)
+	conn, exists := m.activeConnections[key]
+	if !exists || !conn.Active {
+		return false
+	}
+
+	// Test connection by running a simple command
+	testCmd := exec.Command("ssh",
+		"-S", conn.ControlPath,
+		"-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", username, hostname),
+		"echo 'Connection test'",
+	)
+
+	if err := testCmd.Run(); err != nil {
+		logger.Warnf("SSH connection for %s appears to be broken: %v", key, err)
+		conn.Active = false
+		return false
+	}
+
+	return true
+}
+
+// Get a list of all active connections
+func (m *SSHTunnelManager) GetActiveConnections() []string {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	var connections []string
+	for key, conn := range m.activeConnections {
+		if conn.Active {
+			connections = append(connections, key)
+		}
+	}
+	return connections
+}
+
+// Clean up old, unused connections
+func (m *SSHTunnelManager) CleanupIdleConnections(idleTimeout time.Duration) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	now := time.Now()
+	for key, conn := range m.activeConnections {
+		if conn.Active && now.Sub(conn.LastUsed) > idleTimeout {
+			logger.Infof("Closing idle SSH connection for %s (idle for %v)", key, now.Sub(conn.LastUsed))
+
+			// Close the connection using control socket
+			closeCmd := exec.Command("ssh",
+				"-S", conn.ControlPath,
+				"-O", "exit",
+				fmt.Sprintf("%s@%s", conn.Username, conn.Hostname),
+			)
+
+			output, err := closeCmd.CombinedOutput()
+			if err != nil {
+				logger.Warnf("Error closing idle SSH connection: %v, output: %s", err, string(output))
+				// Try to kill the process directly
+				if conn.Cmd != nil && conn.Cmd.Process != nil {
+					conn.Cmd.Process.Kill()
+				}
+			}
+
+			// Clean up control socket
+			if _, err := os.Stat(conn.ControlPath); err == nil {
+				os.Remove(conn.ControlPath)
+			}
+
+			// Mark as inactive and remove from map
+			conn.Active = false
+			delete(m.activeConnections, key)
+		}
+	}
+}
+
+// Start the background cleanup routine
+func (m *SSHTunnelManager) StartCleanupRoutine(checkInterval time.Duration, idleTimeout time.Duration) {
+	go func() {
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			m.CleanupIdleConnections(idleTimeout)
+		}
+	}()
+}
+
+// /////////////////////////////// SSH TunnelAPI Endpoints //////////////////////////////////////
+// Request to open/close a tunnel
+type TunnelRequest struct {
+	Hostname string `json:"hostname"`
+	Username string `json:"username"`
+}
+
+// Open an SSH tunnel
+func openTunnel(ctx echo.Context) error {
+	var req TunnelRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Open SSH tunnel
+	if err := tunnelManager.OpenConnection(req.Username, req.Hostname); err != nil {
+		logger.Errorf("Failed to open SSH tunnel: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to open SSH tunnel: %v", err),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+		"message": fmt.Sprintf("SSH tunnel opened for %s@%s", req.Username, req.Hostname),
+	})
+}
+
+// Close an SSH tunnel
+func closeTunnel(ctx echo.Context) error {
+	var req TunnelRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Close SSH tunnel
+	if err := tunnelManager.CloseConnection(req.Username, req.Hostname); err != nil {
+		logger.Errorf("Failed to close SSH tunnel: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to close SSH tunnel: %v", err),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+		"message": fmt.Sprintf("SSH tunnel closed for %s@%s", req.Username, req.Hostname),
+	})
+}
+
+// Get tunnel status
+func getTunnelStatus(ctx echo.Context) error {
+	username := ctx.QueryParam("username")
+	hostname := ctx.QueryParam("hostname")
+
+	if username == "" || hostname == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing username or hostname"})
+	}
+
+	isActive := tunnelManager.IsConnectionActive(username, hostname)
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"active":     isActive,
+		"connection": fmt.Sprintf("%s@%s", username, hostname),
+	})
+}
+
+// List all active tunnels
+func listTunnels(ctx echo.Context) error {
+	activeConnections := tunnelManager.GetActiveConnections()
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"active_tunnels": activeConnections,
+	})
+}
+
+////////////////////////////////////
 
 // Request for volume operations
 type VolumeRequest struct {
@@ -117,15 +546,11 @@ func listVolumes(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// SSH to remote host and list volumes
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
-	// First, we'll get volume names and driver info
+	// First, get volume names and driver info
 	dockerCommand := "docker volume ls --format '{{.Name}}|{{.Driver}}'"
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error listing volumes: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -152,11 +577,9 @@ func listVolumes(ctx echo.Context) error {
 		volumeName := parts[0]
 		driver := parts[1]
 
-		// Now get detailed info about this volume
-		inspectCmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand,
-			fmt.Sprintf("docker volume inspect %s", volumeName))
-
-		inspectOutput, inspectErr := inspectCmd.CombinedOutput()
+		// Get detailed info about this volume
+		inspectCommand := fmt.Sprintf("docker volume inspect %s", volumeName)
+		inspectOutput, inspectErr := tunnelManager.ExecuteCommand(req.Username, req.Hostname, inspectCommand)
 
 		mountpoint := "N/A"
 		created := "N/A"
@@ -223,14 +646,10 @@ func removeVolume(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// SSH to remote host and remove volume
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
 	dockerCommand := fmt.Sprintf("docker volume rm %s", req.VolumeName)
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error removing volume: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -259,15 +678,11 @@ func listNetworks(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// SSH to remote host and list networks
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
 	// Format: ID|Name|Driver|Scope
 	dockerCommand := "docker network ls --format '{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}'"
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error listing networks: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -297,10 +712,10 @@ func listNetworks(ctx echo.Context) error {
 		scope := parts[3]
 
 		// Now get detailed info about this network
-		inspectCmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand,
-			fmt.Sprintf("docker network inspect %s", networkId))
+		inspectCmd := fmt.Sprintf("docker network inspect %s", networkId)
 
-		inspectOutput, inspectErr := inspectCmd.CombinedOutput()
+		// Execute command using SSH tunnel
+		inspectOutput, inspectErr := tunnelManager.ExecuteCommand(req.Username, req.Hostname, inspectCmd)
 
 		subnet := ""
 		gateway := ""
@@ -368,13 +783,10 @@ func removeNetwork(ctx echo.Context) error {
 	}
 
 	// SSH to remote host and remove network
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
 	dockerCommand := fmt.Sprintf("docker network rm %s", req.NetworkId)
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error removing network: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -407,14 +819,11 @@ func startContainer(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// SSH to remote host and start container
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	// Format the docker command
 	dockerCommand := fmt.Sprintf("docker start %s", req.ContainerId)
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error starting container: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -440,14 +849,11 @@ func stopContainer(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// SSH to remote host and stop container
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	// Format the docker command
 	dockerCommand := fmt.Sprintf("docker stop %s", req.ContainerId)
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error stopping container: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -476,15 +882,11 @@ func listImages(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// SSH to remote host and list images
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
-	// Format: ID|Repository|Tag|Created|Size
+	// Format the docker command
 	dockerCommand := "docker images --format '{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedSince}}|{{.Size}}'"
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error listing images: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -592,16 +994,15 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	// The key issue is here - we need to pass the docker command as a single quoted string to SSH
-	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
-	// Notice the single quotes around the docker command - this preserves the format string
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Format the docker command
 	dockerCommand := "docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}'"
 
-	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
-
-	logger.Infof("Executing command: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
-
-	output, err := cmd.CombinedOutput()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error executing SSH command: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -636,7 +1037,6 @@ func connectToRemoteDocker(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, containers)
 }
-
 func listen(path string) (net.Listener, error) {
 	return net.Listen("unix", path)
 }

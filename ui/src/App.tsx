@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createDockerDesktopClient } from '@docker/extension-api-client';
 import {
   Box,
@@ -20,6 +20,7 @@ import {
   SelectChangeEvent,
   CircularProgress,
   Alert,
+  Button,
   useTheme
 } from '@mui/material';
 
@@ -89,6 +90,12 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // New state for SSH tunnel management
+  const [isTunnelActive, setIsTunnelActive] = useState(false);
+  const [tunnelError, setTunnelError] = useState('');
+  const [isTunnelLoading, setIsTunnelLoading] = useState(false);
+  const visibilityRef = useRef(true);
+
   // Navigation items
   const navItems: NavItem[] = [
     { key: 'dashboard', label: 'Dashboard', icon: <DashboardIcon />, category: 'docker' },
@@ -103,6 +110,28 @@ export function App() {
   useEffect(() => {
     loadSettings();
   }, []);
+
+  // Set up visibility detection
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const isVisible = document.visibilityState === 'visible';
+      visibilityRef.current = isVisible;
+
+      // If we return to the extension and have an active environment, ensure tunnel is open
+      if (isVisible && settings.activeEnvironmentId) {
+        const env = getActiveEnvironment();
+        if (env) {
+          checkAndOpenTunnel(env);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [settings.activeEnvironmentId]);
 
   // Load settings from extension storage
   const loadSettings = async () => {
@@ -124,6 +153,16 @@ export function App() {
 
       setSettings(parsedSettings);
       console.log('Settings loaded:', parsedSettings);
+
+      // Check if we have an active environment and if so, open its tunnel
+      if (parsedSettings.activeEnvironmentId) {
+        const activeEnv = parsedSettings.environments.find(
+          env => env.id === parsedSettings.activeEnvironmentId
+        );
+        if (activeEnv) {
+          checkAndOpenTunnel(activeEnv);
+        }
+      }
     } catch (err: any) {
       console.error('Failed to load settings:', err);
       setError('Failed to load settings: ' + (err.message || 'Unknown error'));
@@ -170,13 +209,116 @@ export function App() {
     return settings.environments.find(env => env.id === settings.activeEnvironmentId);
   };
 
-  // Set active environment
+  interface TunnelResponse {
+    success?: string;
+    error?: string;
+  }
+
+  // SSH Tunnel management functions
+  const openTunnel = async (env: Environment) => {
+    if (!env) return;
+
+    setIsTunnelLoading(true);
+    try {
+      setTunnelError('');
+      const response = await ddClient.extension.vm?.service?.post('/tunnel/open', {
+        hostname: env.hostname,
+        username: env.username
+      }) as TunnelResponse;
+
+      if (response && response.success === "true") {
+        setIsTunnelActive(true);
+        console.log(`SSH tunnel opened for ${env.username}@${env.hostname}`);
+      } else {
+        throw new Error((response && response.error) || 'Unknown error opening SSH tunnel');
+      }
+    } catch (err: any) {
+      console.error('Failed to open SSH tunnel:', err);
+      setTunnelError(`Failed to open SSH tunnel: ${err.message || 'Unknown error'}`);
+      setIsTunnelActive(false);
+    } finally {
+      setIsTunnelLoading(false);
+    }
+  };
+
+  const closeTunnel = async (env: Environment) => {
+    if (!env) return;
+
+    setIsTunnelLoading(true);
+    try {
+      const response = await ddClient.extension.vm?.service?.post('/tunnel/close', {
+        hostname: env.hostname,
+        username: env.username
+      }) as TunnelResponse;
+
+      if (response && response.success === "true") {
+        setIsTunnelActive(false);
+        console.log(`SSH tunnel closed for ${env.username}@${env.hostname}`);
+      }
+    } catch (err: any) {
+      console.error('Failed to close SSH tunnel:', err);
+      // Even if we fail to close it cleanly, consider it closed from the UI perspective
+      setIsTunnelActive(false);
+    } finally {
+      setIsTunnelLoading(false);
+    }
+  };
+
+  interface TunnelStatusResponse {
+    active: string | boolean;
+  }
+
+  const checkTunnelStatus = async (env: Environment) => {
+    if (!env) return;
+
+    try {
+      const response = await ddClient.extension.vm?.service?.get(`/tunnel/status?username=${env.username}&hostname=${env.hostname}`);
+
+      if (response && typeof response === 'object') {
+        const typedResponse = response as TunnelStatusResponse;
+        setIsTunnelActive(typedResponse.active === true);
+      }
+    } catch (err: any) {
+      console.error('Failed to check SSH tunnel status:', err);
+      setIsTunnelActive(false);
+    }
+  };
+
+  const checkAndOpenTunnel = async (env: Environment) => {
+    if (!env) return;
+
+    // First check if tunnel is already active
+    await checkTunnelStatus(env);
+
+    // If not active, open it
+    if (!isTunnelActive) {
+      await openTunnel(env);
+    }
+  };
+
+  // Set active environment and manage the tunnel
   const setActiveEnvironment = async (environmentId: string | undefined) => {
+    // If we had a previous active environment, close its tunnel
+    const prevEnv = getActiveEnvironment();
+    if (prevEnv) {
+      await closeTunnel(prevEnv);
+    }
+
+    // Update the active environment in settings
     const newSettings = {
       ...settings,
       activeEnvironmentId: environmentId
     };
-    await saveSettings(newSettings);
+
+    const success = await saveSettings(newSettings);
+
+    // If we have a new active environment, open its tunnel
+    if (success && environmentId) {
+      const newEnv = settings.environments.find(env => env.id === environmentId);
+      if (newEnv) {
+        await openTunnel(newEnv);
+      }
+    }
   };
 
   // Handle environment change
@@ -184,6 +326,17 @@ export function App() {
     const envId = event.target.value;
     setActiveEnvironment(envId === "none" ? undefined : envId);
   };
+
+  // Add cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Close any active tunnels when component unmounts
+      const activeEnv = getActiveEnvironment();
+      if (activeEnv) {
+        closeTunnel(activeEnv);
+      }
+    };
+  }, []);
 
   // Render current page
   const renderPage = () => {
@@ -251,15 +404,14 @@ export function App() {
     <Box sx={{ display: 'flex' }}>
       <CssBaseline />
 
-      {/* App bar with EXPLICIT white background and better text alignment */}
+      {/* App bar with SSH tunnel status */}
       <AppBar
         position="fixed"
-        color="inherit" // This overrides the default primary color (blue)
+        color="inherit"
         sx={{
           width: `calc(100% - ${drawerWidth}px)`,
           ml: `${drawerWidth}px`,
-          // Setting explicit white/light background with !important to force override
-          bgcolor: '#ffffff !important', // Light mode
+          bgcolor: '#ffffff !important',
           color: 'text.primary',
           boxShadow: 'none',
           borderBottom: 1,
@@ -270,7 +422,7 @@ export function App() {
         <Toolbar sx={{
           minHeight: '56px',
           display: 'flex',
-          alignItems: 'center', // Center content vertically
+          alignItems: 'center',
         }}>
           <Typography
             variant="h6"
@@ -280,14 +432,55 @@ export function App() {
               fontSize: '1rem',
               fontWeight: 500,
               display: 'flex',
-              alignItems: 'center', // Ensure text is vertically centered
+              alignItems: 'center',
               height: '100%'
             }}
           >
             {navItems.find(item => item.key === currentPage)?.label || 'Remote Docker'}
           </Typography>
 
-          {/* Environment selector dropdown with improved styling */}
+          {/* SSH Tunnel Status Indicator */}
+          {getActiveEnvironment() && (
+            <Box sx={{
+              display: 'flex',
+              alignItems: 'center',
+              mr: 2,
+              typography: 'body2',
+              color: isTunnelActive ? 'success.main' : 'error.main',
+              fontSize: '0.75rem',
+              whiteSpace: 'nowrap'
+            }}>
+              <Box
+                component="span"
+                sx={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  bgcolor: isTunnelActive ? 'success.main' : 'error.main',
+                  mr: 1
+                }}
+              />
+              {isTunnelActive ? 'SSH Connected' : 'SSH Disconnected'}
+              {!isTunnelActive && (
+                <Button
+                  size="small"
+                  color="primary"
+                  variant="text"
+                  onClick={() => {
+                    const env = getActiveEnvironment();
+                    if (env) openTunnel(env);
+                  }}
+                  disabled={isTunnelLoading}
+                  sx={{ ml: 1, py: 0, minWidth: 'auto' }}
+                >
+                  {isTunnelLoading ? 'Connecting...' : 'Reconnect'}
+                </Button>
+              )}
+            </Box>
+          )}
+
+          {/* Environment selector dropdown */}
           {currentPage !== 'environments' && settings.environments.length > 0 && (
             <FormControl
               variant="outlined"
@@ -317,13 +510,31 @@ export function App() {
               >
                 <MenuItem value="none">-- Select Environment --</MenuItem>
                 {settings.environments.map((env) => (
-                  <MenuItem key={env.id} value={env.id}>{env.name}</MenuItem>
+                  <MenuItem key={env.id} value={env.id}>
+                    {env.name}
+                  </MenuItem>
                 ))}
               </Select>
             </FormControl>
           )}
         </Toolbar>
       </AppBar>
+
+      {/* Tunnel error message */}
+      {tunnelError && (
+        <Alert
+          severity="error"
+          sx={{
+            mt: '56px', // Match toolbar height
+            position: 'sticky',
+            top: '56px',
+            zIndex: 1000
+          }}
+          onClose={() => setTunnelError('')}
+        >
+          {tunnelError}
+        </Alert>
+      )}
 
       {/* Sidebar navigation */}
       <Drawer
@@ -436,7 +647,7 @@ export function App() {
         }}
       >
         {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
+          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
             {error}
           </Alert>
         )}
