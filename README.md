@@ -43,7 +43,7 @@ The extension consists of two main parts:
 
 ### 📖 Getting Started
 
-1. Install the extension through Docker Desktop Extensions Marketplace
+1. Install the extension using the image on Docker Hub
 2. Add your remote environments in the Settings tab
 3. Select an environment to connect
 4. Start managing your remote Docker environment
