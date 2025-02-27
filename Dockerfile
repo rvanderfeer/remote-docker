@@ -65,7 +65,7 @@ LABEL org.opencontainers.image.title="Remote Docker" \
     com.docker.extension.publisher-url="https://github.com/egekocabas/remote-docker" \
     com.docker.extension.additional-urls="[{\"title\":\"Project GitHub\",\"url\":\"https:\/\/github.com\/egekocabas\/remote-docker\"}]" \
     com.docker.extension.changelog="Initial release" \
-    com.docker.extension.categories="container-orchestration,utility-tools"
+    com.docker.extension.categories="utility-tools,container-orchestration"
 
 # Install SSH client
 RUN apk add --no-cache openssh-client docker

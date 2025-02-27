@@ -9,6 +9,12 @@ NO_COLOR   = \033[m
 build-extension: ## Build service image to be deployed as a desktop extension
 	docker build --tag=$(IMAGE):$(TAG) .
 
+build-extension-no-cache: ## Build service image to be deployed as a desktop extension without cache
+	docker build --no-cache --tag=$(IMAGE):$(TAG) .
+
+uninstall-extension: ## Uninstall the extension
+	docker extension uninstall $(IMAGE):$(TAG)
+
 install-extension: build-extension ## Install the extension
 	docker extension install $(IMAGE):$(TAG) -f
 
