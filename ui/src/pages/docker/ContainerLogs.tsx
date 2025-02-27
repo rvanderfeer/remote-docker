@@ -12,7 +12,6 @@ import {
   TextField,
   Alert,
 } from '@mui/material';
-import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 import CloseIcon from '@mui/icons-material/Close';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import AddIcon from '@mui/icons-material/Add';
@@ -42,6 +41,18 @@ const client = createDockerDesktopClient();
 function useDockerDesktopClient() {
   return client;
 }
+
+const CONTAINER_COLORS = [
+  '#c586c0', // lavender
+  '#89d185', // greenish
+  '#ce9178', // salmon
+  '#4fc1ff', // cyan
+  '#d7ba7d', // yellowish
+  '#d16969', // red
+  '#b5cea8', // pale green
+  '#dcdcaa', // pale yellow
+  '#569cd6', // light blue
+];
 
 /**
  * Pattern-based log highlighting
@@ -95,7 +106,13 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const ddClient = useDockerDesktopClient();
 
   // State
-  const [logs, setLogs] = useState<string[]>([]);
+  // Container logs: simple string array
+  const [containerLogs, setContainerLogs] = useState<string[]>([]);
+  // Compose logs: an array of parsed objects
+  const [composeLogs, setComposeLogs] = useState<ComposeLogLine[]>([]);
+
+  const [containerColorMap, setContainerColorMap] = useState<Record<string, string>>({});
+
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -132,10 +149,14 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   };
 
   useEffect(() => {
-    if (autoScroll && logs.length > 0) {
-      scrollToBottom();
+    if (autoScroll) {
+      if (logsType === 'container' && containerLogs.length > 0) {
+        scrollToBottom();
+      } else if (logsType === 'compose' && composeLogs.length > 0) {
+        scrollToBottom();
+      }
     }
-  }, [logs, autoScroll]);
+  }, [containerLogs, composeLogs, autoScroll]);
 
   // Setup log polling
   useEffect(() => {
@@ -145,7 +166,9 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
       pollTimer.current = null;
     }
 
-    setLogs([]);
+    setContainerLogs([]);
+    setComposeLogs([]);
+
     setError('');
     setIsLoading(true);
 
@@ -195,7 +218,8 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     try {
       if (resetLogs) {
         setIsLoading(true);
-        setLogs([]);
+        setContainerLogs([]);
+        setComposeLogs([]);
       }
 
       if (!ddClient.extension?.vm?.service) {
@@ -229,13 +253,43 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         throw new Error(errorResponse.error);
       }
 
-      // If no error, update logs
-      setLogs((prev) => {
-        if (resetLogs || prev.length === 0) {
-          return response.logs;
-        }
-        return mergeNewLines(prev, response.logs);
-      });
+      const newLines = response.logs || [];
+
+      if (logsType === 'container') {
+        setContainerLogs((old) => {
+          if (resetLogs || old.length === 0) {
+            return newLines;
+          }
+          return mergeContainerLogs(old, newLines);
+        });
+      } else {
+        // parse new lines into ComposeLogLine
+        const parsed = newLines
+          .map((l) => parseComposeLine(l))
+          .filter((lineObj): lineObj is ComposeLogLine => !!lineObj);
+
+        // Now assign colors for any containerName we haven't seen yet
+        setContainerColorMap(oldMap => {
+          const updatedMap = { ...oldMap };
+          parsed.forEach(lineObj => {
+            const cname = lineObj.containerName;
+            if (cname && !updatedMap[cname]) {
+              // pick next color
+              const existingKeys = Object.keys(updatedMap).length;
+              const colorIndex = existingKeys % CONTAINER_COLORS.length;
+              updatedMap[cname] = CONTAINER_COLORS[colorIndex];
+            }
+          });
+          return updatedMap;
+        });
+
+        setComposeLogs((old) => {
+          if (resetLogs || old.length === 0) {
+            return parsed;
+          }
+          return mergeComposeLogsByTimestamp(old, parsed);
+        });
+      }
 
       setError('');
       setIsLoading(false);
@@ -245,6 +299,34 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
       setIsLoading(false);
     }
   };
+
+  // -----------------------------------------
+  // Merge for Container logs: naive last line
+  // -----------------------------------------
+  function mergeContainerLogs(oldLines: string[], newLines: string[]): string[] {
+    const lastOld = oldLines[oldLines.length - 1];
+    const idx = newLines.indexOf(lastOld);
+    if (idx === -1) {
+      return [...oldLines, ...newLines];
+    } else if (idx === newLines.length - 1) {
+      return oldLines;
+    } else {
+      const toAppend = newLines.slice(idx + 1);
+      return [...oldLines, ...toAppend];
+    }
+  }
+
+  // -----------------------------------------
+  // Merge for Compose logs by timestamp
+  // -----------------------------------------
+  function mergeComposeLogsByTimestamp(oldLines: ComposeLogLine[], newLines: ComposeLogLine[]): ComposeLogLine[] {
+    // We'll assume oldLines is already sorted by timestamp
+    // We only add truly "new" lines that have a timestamp >= the last line's timestamp
+    const lastTs = oldLines[oldLines.length - 1].timestamp;
+    const newOnly = newLines.filter((nl) => nl.timestamp > lastTs);
+    // If some lines share the exact same timestamp but different text, you'd do a tie-breaker
+    return [...oldLines, ...newOnly].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
 
   function stripComposePrefix(line: string): string {
     // Docker Compose lines often look like: "<service-name>    | <the rest>"
@@ -282,22 +364,50 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     return -1;
   }
 
+  // Each parsed line if logsType === "compose"
+  interface ComposeLogLine {
+    containerName: string;
+    timestamp: Date;
+    rawLine: string;   // the original line
+    logText: string;   // the part after the timestamp
+  }
 
-  // Merge newly fetched lines with existing lines
-  // to avoid duplicates and partial refreshes
-  const mergeNewLines = (oldLines: string[], newLines: string[]): string[] => {
-    if (oldLines.length === 0) return newLines;
-    const lastOld = oldLines[oldLines.length - 1];
-    const idx = findIndexOfLastOldInNew(lastOld, newLines, logsType);
-    if (idx === -1) {
-      return [...oldLines, ...newLines];
-    } else if (idx === newLines.length - 1) {
-      return oldLines;
-    } else {
-      const toAppend = newLines.slice(idx + 1);
-      return [...oldLines, ...toAppend];
+
+  /**
+   * Example parse for a line like:
+   *   "service-1  | 2025-02-27T12:34:56.123Z Some log text"
+   */
+  function parseComposeLine(line: string): ComposeLogLine | null {
+    if (!line.trim()) return null; // empty line
+
+    // Split at the first "|" to separate container from the rest
+    const idx = line.indexOf('|');
+    let containerName = '';
+    let remainder = line;
+    if (idx !== -1) {
+      containerName = line.slice(0, idx).trim();
+      remainder = line.slice(idx + 1).trim();
     }
-  };
+
+    // remainder might be "2025-02-27T12:34:56.123Z Some log text"
+    // We'll parse out the timestamp from the log text
+    const match = remainder.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)(?:\s+(.*))?$/);
+    if (!match) {
+      // If it doesn't match, you might have lines without timestamps
+      // or different formatting. We fallback to a "now" timestamp
+      throw new Error(`Failed to parse line: ${line}`);
+    }
+
+    const timestampStr = match[1];  // e.g. "2025-02-27T12:34:56.123Z"
+    const text = match[3];         // e.g. "Some log text"
+
+    return {
+      containerName,
+      timestamp: new Date(timestampStr),
+      rawLine: line,
+      logText: text,
+    };
+  }
 
   // Font size increment/decrement
   const increaseFontSize = () => setLogFontSize((prev) => Math.min(prev + 0.1, 2));
@@ -327,6 +437,39 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     // Keep track of user input in local state.
     setTempTailLines(e.target.value);
   };
+
+
+  // -----------------------------------------
+  // Render
+  // -----------------------------------------
+  // For display, we show either containerLogs or composeLogs
+  // We'll convert composeLogs -> rawLine strings if needed
+// For Compose logs, build a "render string" that has the container name colored
+  const finalLinesToRender: string[] = logsType === 'container'
+    ? containerLogs
+    : composeLogs.map((lineObj) => {
+      const cname = lineObj.containerName;
+      const color = containerColorMap[cname] || '#fff';
+
+      // We want something like:
+      // "<span style='color: #ce9178'>service-1</span> | 2025-02-27T12:34:56.123Z Some log text"
+      // Then pass that to colorizeLog.
+
+      // Original lineObj.rawLine might be "service-1 | 2025-02-27T12:34:56.123Z Some log text"
+      // We can remove the original container prefix and re-inject it with color, or we can just
+      // replace the container name portion. Let's reconstruct it for clarity:
+
+      const idx = lineObj.rawLine.indexOf('|');
+      if (idx === -1) {
+        // no pipe found, just color the containerName
+        // e.g. if line was just "service-1" with no logs
+        return `<span style="color: ${color}; font-weight: bold;">${cname}</span> ${lineObj.rawLine}`;
+      } else {
+        // everything after '|'
+        const remainder = lineObj.rawLine.slice(idx + 1).trimStart();
+        return `<span style="color: ${color}; font-weight: bold;">${cname}</span> | ${remainder}`;
+      }
+    });
 
   return (
     <Box
@@ -445,7 +588,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         onScroll={handleScroll}
       >
         {/* Loading indicator if no logs yet */}
-        {isLoading && logs.length === 0 ? (
+        {isLoading && finalLinesToRender.length === 0 ? (
           <Box
             sx={{
               display: 'flex',
@@ -456,7 +599,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           >
             <CircularProgress color="inherit" size={24} />
           </Box>
-        ) : logs.length === 0 ? (
+        ) : finalLinesToRender.length === 0 ? (
           <Box
             sx={{
               display: 'flex',
@@ -470,7 +613,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           </Box>
         ) : (
           <>
-            {logs.map((line, index) => (
+            {finalLinesToRender.map((line, index) => (
               <Box
                 key={index}
                 sx={{
