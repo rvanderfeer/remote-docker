@@ -84,11 +84,10 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
-
-  // Existing toggles
-  const [follow, setFollow] = useState(true);
-  const [tailLines, setTailLines] = useState(100);
   const [timestamps] = useState(true);
+
+  const [tailLines, setTailLines] = useState(500);
+  const [tempTailLines, setTempTailLines] = useState(tailLines);
 
   // New state for font size
   const [logFontSize, setLogFontSize] = useState<number>(0.75);
@@ -138,25 +137,32 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
       return;
     }
 
-    // If user enabled "follow," start polling
-    if (follow) {
-      // Immediately fetch once
-      fetchLogs();
-      // Then set up repeated polling
-      pollTimer.current = setInterval(() => {
-        fetchLogs(false);
-      }, POLL_INTERVAL_MS);
-    } else {
-      // If follow is off, do one fetch
-      fetchLogs();
-    }
+    let isMounted = true; // Prevent running after unmount
 
-    return () => {
-      if (pollTimer.current) {
-        clearInterval(pollTimer.current);
+    const pollLogs = async () => {
+      await fetchLogs(false); // Step 1: Fetch logs and wait for it to finish
+      if (isMounted) {
+        pollTimer.current = setTimeout(pollLogs, POLL_INTERVAL_MS); // Step 2: Wait for interval before fetching again
       }
     };
-  }, [activeEnvironment, containerId, follow, tailLines, timestamps]);
+
+    // Start the first fetch, then begin polling
+    fetchLogs().then(() => {
+      if (isMounted) {
+        // Then set up repeated polling
+        pollLogs();
+      }
+    });
+
+    return () => {
+      // Stop further execution if the component unmounts
+      isMounted = false;
+      if (pollTimer.current) {
+        clearTimeout(pollTimer.current);
+        pollTimer.current = null;
+      }
+    };
+  }, [activeEnvironment, containerId, timestamps]);
 
   const handleReload = () => {
     fetchLogs(true);
@@ -225,6 +231,31 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const increaseFontSize = () => setLogFontSize((prev) => Math.min(prev + 0.1, 2));
   const decreaseFontSize = () => setLogFontSize((prev) => Math.max(prev - 0.1, 0.5));
 
+  const handleKeyDownForInput = (e: any) => {
+    if (e.key === 'Enter') {
+      // triggers handleBlur
+      e.target.blur();
+    }
+  };
+
+  const handleBlurForInput = () => {
+    // On blur, validate and update the "final" state.
+    let numericValue = Number(tempTailLines);
+    if (isNaN(numericValue) || numericValue < 500) {
+      numericValue = 500; // enforce minimum
+    }
+    if(numericValue > 5000) {
+      numericValue = 5000; // enforce maximum
+    }
+    setTailLines(numericValue);
+    setTempTailLines(numericValue);
+  };
+
+  const handleChangeForInput = (e: any) => {
+    // Keep track of user input in local state.
+    setTempTailLines(e.target.value);
+  };
+
   return (
     <Box
       sx={{
@@ -247,8 +278,8 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           borderColor: 'divider',
         }}
       >
-        <Typography variant="h6" sx={{ fontSize: '1rem' }}>
-          Logs: {containerName} ({containerId.substring(0, 12)})
+        <Typography sx={{ fontSize: '1rem' }}>
+          {containerName} ({containerId.substring(0, 12)})
         </Typography>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -269,11 +300,13 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           <TextField
             type="number"
             label="Tail lines"
-            value={tailLines}
-            onChange={(e) => setTailLines(Number(e.target.value))}
+            value={tempTailLines}
+            onChange={handleChangeForInput}
+            onBlur={handleBlurForInput}
+            onKeyDown={handleKeyDownForInput}
             size="small"
             InputProps={{
-              inputProps: { min: 1 },
+              inputProps: { min: 500 },
             }}
             sx={{ width: 100 }}
           />
@@ -293,12 +326,6 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           <Tooltip title="Reload logs">
             <IconButton onClick={handleReload} disabled={isLoading} size="small">
               <RefreshIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-
-          <Tooltip title="Scroll to bottom">
-            <IconButton onClick={scrollToBottom} size="small">
-              <VerticalAlignBottomIcon fontSize="small" />
             </IconButton>
           </Tooltip>
 
