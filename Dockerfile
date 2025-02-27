@@ -24,23 +24,24 @@ RUN npm run build
 
 FROM alpine
 LABEL org.opencontainers.image.title="Remote Docker"
-LABEL org.opencontainers.image.description="A Docker Desktop extension for managing and monitoring remote Docker environments via SSH tunneling."
+LABEL org.opencontainers.image.description="Manage and monitor remote Docker environments via SSH tunneling.\
+    Access containers, images, networks, volumes, logs, and stats with a familiar UI."
 LABEL org.opencontainers.image.vendor="Ege Kocabaş"
 LABEL com.docker.desktop.extension.api.version="0.3.4"
 LABEL com.docker.extension.categories="utility-tools,container-orchestration"
 LABEL com.docker.extension.account-info=""
 LABEL com.docker.desktop.extension.icon="https://raw.githubusercontent.com/egekocabas/remote-docker/refs/heads/main/assets/extension-icon.svg"
 LABEL com.docker.extension.screenshots="[\
-     {\"alt\": \"Dashboard\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/01_dashboard.png\"},\
-     {\"alt\": \"Containers\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/02_containers.png\"}, \
-     {\"alt\": \"Compose logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/03_compose_logs.png\"}, \
-     {\"alt\": \"Images\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/04_images.png\"}, \
-     {\"alt\": \"Volumes\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/05_volumes.png\"}, \
-     {\"alt\": \"Networks\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/06_networks.png\"}, \
-     {\"alt\": \"Environments\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/07_environments.png\"}, \
-     {\"alt\": \"Environment Selection\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/08_environment_selection.png\"}, \
-     {\"alt\": \"Disconnect\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/09_disconnect.png\"}, \
-     {\"alt\": \"Container Logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/10_container_logs.png\"}]"
+    {\"alt\": \"Dashboard\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/01_dashboard.png\"},\
+    {\"alt\": \"Containers\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/02_containers.png\"}, \
+    {\"alt\": \"Compose logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/03_compose_logs.png\"}, \
+    {\"alt\": \"Images\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/04_images.png\"}, \
+    {\"alt\": \"Volumes\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/05_volumes.png\"}, \
+    {\"alt\": \"Networks\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/06_networks.png\"}, \
+    {\"alt\": \"Environments\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/07_environments.png\"}, \
+    {\"alt\": \"Environment Selection\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/08_environment_selection.png\"}, \
+    {\"alt\": \"Disconnect\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/09_disconnect.png\"}, \
+    {\"alt\": \"Container Logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/10_container_logs.png\"}]"
 LABEL com.docker.extension.detailed-description="\
     A Docker Desktop extension that brings remote Docker management with a user-friendly UI.<br><br>\
     <b>Key Features:</b><br><br>\
@@ -64,8 +65,10 @@ LABEL com.docker.extension.detailed-description="\
     - Select a remote instance and start managing Docker remotely<br><br>\
     <b>Warning:</b> Use this extension at your own risk. Always review the code and validate actions before running or installing it.<br><br>"
 LABEL com.docker.extension.publisher-url="https://github.com/egekocabas/remote-docker"
-LABEL com.docker.extension.additional-urls="[{\"title\":\"Project GitHub\",\"url\":\"https:\/\/github.com\/egekocabas\/remote-docker\"}]"
-LABEL com.docker.extension.changelog="Initial release"
+LABEL com.docker.extension.additional-urls="\
+    [{\"title\":\"GitHub\",\"url\":\"https:\/\/github.com\/egekocabas\/remote-docker\"},\
+    {\"title\":\"MIT License\",\"url\":\"https://github.com/egekocabas/remote-docker/blob/main/LICENSE\"}]"
+LABEL com.docker.extension.changelog="<ul><li>Initial release</li></ul>"
 
 
 # Install SSH client
