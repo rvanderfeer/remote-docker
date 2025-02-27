@@ -88,6 +88,9 @@ const Containers: React.FC<ContainersProps> = ({
                                                }) => {
   const [composeGroups, setComposeGroups] = useState<ComposeGroup[]>([]);
   const [ungroupedContainers, setUngroupedContainers] = useState<DockerContainer[]>([]);
+
+  const [expandedComposeGroups, setExpandedComposeGroups] = useState<Record<string, boolean>>({});
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const ddClient = useDockerDesktopClient();
@@ -255,6 +258,14 @@ const Containers: React.FC<ContainersProps> = ({
       setIsRefreshing(false);
     }
   };
+
+  const toggleComposeGroup = (groupName: string) => {
+    setExpandedComposeGroups((prev) => ({
+      ...prev,
+      [groupName]: !prev[groupName],
+    }));
+  };
+
 
   // Start a container
   const startContainer = async (containerId: string) => {
@@ -472,18 +483,16 @@ const Containers: React.FC<ContainersProps> = ({
     );
   }
 
+  interface ComposeGroupRowProps {
+    group: ComposeGroup;
+    expanded: boolean;
+    onToggle: (groupName: string) => void;
+  }
+
   // --------------------------------------------------
   // Collapsible Row for Compose Group
   // --------------------------------------------------
-  const ComposeGroupRow: React.FC<{ group: ComposeGroup }> = ({ group }) => {
-    const [open, setOpen] = useState(false);
-
-    // Renders the sub-table with containers
-    const renderContainersTable = () => {
-      return (
-        group.containers.map(container => renderContainerRow(container))
-      );
-    };
+  const ComposeGroupRow: React.FC<ComposeGroupRowProps> = ({ group, expanded, onToggle }) => {
 
     return (
       <>
@@ -492,9 +501,9 @@ const Containers: React.FC<ContainersProps> = ({
           <TableCell width="15%">
             <IconButton
               size="small"
-              onClick={() => setOpen(!open)}
+              onClick={() => onToggle(group.name)}
             >
-              {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
+              {expanded ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
             </IconButton>
             <strong>{group.name}</strong>
           </TableCell>
@@ -518,10 +527,9 @@ const Containers: React.FC<ContainersProps> = ({
           </TableCell>
         </TableRow>
 
-        {
-          open && group.containers.length > 0 && (
-            group.containers.map(container => renderContainerRow(container))
-          )
+        { expanded
+          && group.containers.length > 0
+          && (group.containers.map(container => renderContainerRow(container)))
         }
       </>
     );
@@ -607,7 +615,12 @@ const Containers: React.FC<ContainersProps> = ({
               <TableBody>
                 {/* Compose Groups */}
                 {composeGroups.map(group => (
-                  <ComposeGroupRow key={group.name} group={group} />
+                  <ComposeGroupRow
+                    key={group.name}
+                    group={group}
+                    expanded={expandedComposeGroups[group.name] || false}
+                    onToggle={toggleComposeGroup}
+                  />
                 ))}
 
                 {/* Ungrouped */}
