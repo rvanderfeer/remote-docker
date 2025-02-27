@@ -11,7 +11,8 @@ import {
   TableContainer,
   TableHead, TableRow,
   TextField,
-  Typography
+  Typography,
+  useTheme
 } from '@mui/material';
 
 // Note: This line relies on Docker Desktop's presence as a host application.
@@ -29,8 +30,8 @@ interface Container {
   status: string;
 }
 
-
 export function App() {
+  const theme = useTheme();
   const [hostname, setHostname] = useState('');
   const [username, setUsername] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -73,13 +74,17 @@ export function App() {
 
   return (
     <Box sx={{ p: 4 }}>
-      <Typography variant="h4" gutterBottom>Remote Docker Connector</Typography>
+      <Typography variant="h4" gutterBottom>
+        Remote Docker Connector
+      </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
         Connect to a remote Docker daemon using SSH and view containers.
       </Typography>
 
       <Paper sx={{ p: 3, mb: 4 }}>
-        <Typography variant="h6" gutterBottom>Connection Details</Typography>
+        <Typography variant="h6" gutterBottom>
+          Connection Details
+        </Typography>
 
         <Stack direction="column" spacing={3}>
           <TextField
@@ -112,7 +117,7 @@ export function App() {
             disabled={isLoading}
             sx={{ alignSelf: 'flex-start' }}
           >
-            {isLoading && <CircularProgress size={24} color="inherit" sx={{ mr: 1 }} />}
+            {isLoading && <CircularProgress size="small" sx={{ mr: 1 }} />}
             {isLoading ? 'Connecting...' : 'Connect & List Containers'}
           </Button>
         </Stack>
@@ -120,7 +125,9 @@ export function App() {
 
       {containers.length > 0 ? (
         <Box>
-          <Typography variant="h6" gutterBottom>Remote Containers</Typography>
+          <Typography variant="h6" gutterBottom>
+            Remote Containers
+          </Typography>
 
           <TableContainer component={Paper}>
             <Table sx={{ minWidth: 650 }}>
@@ -134,11 +141,21 @@ export function App() {
               </TableHead>
               <TableBody>
                 {containers.map((container) => (
-                  <TableRow key={container.id}>
-                    <TableCell>{container.id.substring(0, 12)}</TableCell>
+                  <TableRow key={container.id} hover>
+                    <TableCell sx={{ fontFamily: 'monospace' }}>
+                      {container.id.substring(0, 12)}
+                    </TableCell>
                     <TableCell>{container.name}</TableCell>
                     <TableCell>{container.image}</TableCell>
-                    <TableCell>{container.status}</TableCell>
+                    <TableCell
+                      sx={{
+                        color: container.status.toLowerCase().includes('up')
+                          ? 'success.main'
+                          : 'text.secondary'
+                      }}
+                    >
+                      {container.status}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

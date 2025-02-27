@@ -10,10 +10,16 @@ build-extension: ## Build service image to be deployed as a desktop extension
 	docker build --tag=$(IMAGE):$(TAG) .
 
 install-extension: build-extension ## Install the extension
-	docker extension install $(IMAGE):$(TAG)
+	docker extension install $(IMAGE):$(TAG) -f
 
 update-extension: build-extension ## Update the extension
-	docker extension update $(IMAGE):$(TAG)
+	docker extension update $(IMAGE):$(TAG) -f
+
+run-client: ## Run the client
+	npm --prefix ui install && npm --prefix ui run dev
+
+set-extension-source: ## Set Docker extension dev source
+	docker extension dev ui-source egekocabas/remote-docker:latest http://localhost:3000
 
 prepare-buildx: ## Create buildx builder for multi-arch build, if not exists
 	docker buildx inspect $(BUILDER) || docker buildx create --name=$(BUILDER) --driver=docker-container --driver-opt=network=host
