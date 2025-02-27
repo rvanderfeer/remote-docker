@@ -433,7 +433,7 @@ export function App() {
         sx={{
           width: `calc(100% - ${drawerWidth}px)`,
           ml: `${drawerWidth}px`,
-          bgcolor: isLogsOpen ? 'primary.main' : 'inherit',
+          bgcolor: 'inherit',
           color: 'text.primary',
           boxShadow: 'none',
           borderBottom: 1,
@@ -495,7 +495,7 @@ export function App() {
                     const env = getActiveEnvironment();
                     if (env) closeTunnel(env);
                   }}
-                  disabled={isTunnelLoading}
+                  disabled={isTunnelLoading || isLogsOpen}
                   sx={{ ml: 1, py: 0, minWidth: 'auto' }}
                 >
                   {isTunnelLoading ? 'Disconnecting...' : 'Disconnect'}
@@ -510,7 +510,7 @@ export function App() {
                     const env = getActiveEnvironment();
                     if (env) openTunnel(env);
                   }}
-                  disabled={isTunnelLoading}
+                  disabled={isTunnelLoading || isLogsOpen}
                   sx={{ ml: 1, py: 0, minWidth: 'auto' }}
                 >
                   {isTunnelLoading ? 'Connecting...' : 'Connect'}
@@ -525,17 +525,18 @@ export function App() {
               variant="outlined"
               size="small"
               sx={{
+                opacity: isLogsOpen ? 0.6 : 1,
                 minWidth: 180,
                 '& .MuiOutlinedInput-root': {
                   borderRadius: 1,
-                  backgroundColor: 'rgba(0, 0, 0, 0.03)'
+                  backgroundColor: (theme) => theme.palette.background.default
                 },
                 '& .MuiSelect-select': {
                   py: 1,
-                  color: 'text.primary'
+                  color: (theme) => theme.palette.background.default + 1,
                 },
                 '& .MuiInputLabel-root': {
-                  color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)'
+                  color: (theme) => theme.palette.background.default + 1,
                 }
               }}
             >
@@ -546,7 +547,7 @@ export function App() {
                 value={settings.activeEnvironmentId || "none"}
                 label="Environment"
                 onChange={handleEnvironmentChange}
-                disabled={isLogsOpen} // Disable while logs are open
+                disabled={isLogsOpen}
               >
                 <MenuItem value="none">-- Select Environment --</MenuItem>
                 {settings.environments.map((env) => (
