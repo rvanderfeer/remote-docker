@@ -212,16 +212,14 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
       if (logsType === 'container') {
         endpoint = '/container/logs';
         payload.containerId = resourceId;
-        payload.tail = tailLines;
-        // For containers, maybe we also have "timestamps: true/false"
-        payload.timestamps = true;
       } else {
         // Compose logs
         endpoint = '/compose/logs';
         payload.composeProject = resourceId;
-        // If you want to allow tail lines for compose, do so:
-        payload.tail = tailLines;
       }
+
+      payload.tail = tailLines;
+      payload.timestamps = true;
 
       const response = (await ddClient.extension.vm.service.post(endpoint, payload)) as ContainerLogsResponse;
 
@@ -248,12 +246,49 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     }
   };
 
+  function stripComposePrefix(line: string): string {
+    // Docker Compose lines often look like: "<service-name>    | <the rest>"
+    // We'll split just on the FIRST '|' character.
+    const idx = line.indexOf('|');
+    if (idx !== -1) {
+      // everything after the '|'
+      return line.slice(idx + 1).trimStart().trimEnd();
+    }
+    return line.trimStart().trimEnd(); // if no '|' found, just return original
+  }
+
+  /**
+   * Finds the index in `newLines` whose *normalized* version matches `oldLast`.
+   */
+  function findIndexOfLastOldInNew(
+    oldLast: string,
+    newLines: string[],
+    logsType: 'container' | 'compose'
+  ): number {
+    // Normalize oldLast if logsType is compose
+    const oldLastNormalized =
+      logsType === 'compose' ? stripComposePrefix(oldLast) : oldLast;
+
+    // Scan newLines
+    for (let i = 0; i < newLines.length; i++) {
+      // Normalize each new line if logsType is compose
+      const newLineNormalized =
+        logsType === 'compose' ? stripComposePrefix(newLines[i]) : newLines[i];
+
+      if (newLineNormalized === oldLastNormalized) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+
   // Merge newly fetched lines with existing lines
   // to avoid duplicates and partial refreshes
   const mergeNewLines = (oldLines: string[], newLines: string[]): string[] => {
     if (oldLines.length === 0) return newLines;
     const lastOld = oldLines[oldLines.length - 1];
-    const idx = newLines.indexOf(lastOld);
+    const idx = findIndexOfLastOldInNew(lastOld, newLines, logsType);
     if (idx === -1) {
       return [...oldLines, ...newLines];
     } else if (idx === newLines.length - 1) {
