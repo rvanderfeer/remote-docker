@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +145,11 @@ func main() {
 	router.POST("/container/logs", getContainerLogs)
 	router.POST("/compose/logs", getComposeLogs)
 
+	router.POST("/dashboard/overview", getDashboardOverview)
+	router.POST("/dashboard/resources", getDashboardResources)
+	router.POST("/dashboard/systeminfo", getDashboardSystemInfo)
+	router.POST("/dashboard/events", getDashboardEvents)
+
 	// Graceful shutdown handling
 	c := make(chan os.Signal, 1)
 	go func() {
@@ -154,6 +160,432 @@ func main() {
 	}()
 
 	logger.Fatal(router.Start(startURL))
+}
+
+// Dashboard overview response
+type DashboardOverview struct {
+	Containers struct {
+		Total   int `json:"total"`
+		Running int `json:"running"`
+		Stopped int `json:"stopped"`
+	} `json:"containers"`
+	Images struct {
+		Total int    `json:"total"`
+		Size  string `json:"size"` // Human readable total size
+	} `json:"images"`
+	Volumes struct {
+		Total int    `json:"total"`
+		Size  string `json:"size"` // Human readable total size
+	} `json:"volumes"`
+	Networks struct {
+		Total int `json:"total"`
+	} `json:"networks"`
+	ComposeProjects struct {
+		Total   int `json:"total"`
+		Running int `json:"running"`
+		Partial int `json:"partial"`
+		Stopped int `json:"stopped"`
+	} `json:"composeProjects"`
+}
+
+// Resource usage for a container
+type ContainerResource struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	CPUPerc  string  `json:"cpuPerc"`  // e.g., "0.05%"
+	CPUUsage float64 `json:"cpuUsage"` // numeric value for charting
+	MemUsage string  `json:"memUsage"` // e.g., "1.2GiB / 15.5GiB"
+	MemPerc  string  `json:"memPerc"`  // e.g., "7.74%"
+	MemValue float64 `json:"memValue"` // numeric value for charting
+	NetIO    string  `json:"netIO"`    // e.g., "1.45GB / 2.3GB"
+	BlockIO  string  `json:"blockIO"`  // e.g., "423MB / 8.5MB"
+}
+
+// Resource usage response
+type ResourcesResponse struct {
+	Containers []ContainerResource `json:"containers"`
+	System     struct {
+		CPUUsage    float64 `json:"cpuUsage"`    // percentage
+		MemoryUsage float64 `json:"memoryUsage"` // percentage
+		DiskUsage   float64 `json:"diskUsage"`   // percentage
+	} `json:"system"`
+}
+
+// Docker system information
+type SystemInfoResponse struct {
+	DockerVersion    string `json:"dockerVersion"`
+	APIVersion       string `json:"apiVersion"`
+	OS               string `json:"os"`
+	Kernel           string `json:"kernel"`
+	Architecture     string `json:"architecture"`
+	CPUs             int    `json:"cpus"`
+	Memory           string `json:"memory"`
+	DockerRoot       string `json:"dockerRoot"`
+	ContainersRoot   string `json:"containersRoot"`
+	ServerTime       string `json:"serverTime"`
+	ExperimentalMode bool   `json:"experimentalMode"`
+}
+
+// Docker event
+type DockerEvent struct {
+	Time     int64  `json:"time"`
+	TimeStr  string `json:"timeStr"`  // Human readable
+	Type     string `json:"type"`     // container, image, volume, network
+	Action   string `json:"action"`   // create, start, stop, destroy, etc.
+	Actor    string `json:"actor"`    // Name/ID of the object
+	Scope    string `json:"scope"`    // local or swarm
+	Status   string `json:"status"`   // success or error (if applicable)
+	Message  string `json:"message"`  // Additional details
+	Category string `json:"category"` // info, warning, error
+}
+
+// Events response
+type EventsResponse struct {
+	Events []DockerEvent `json:"events"`
+}
+
+// Request for dashboard endpoints
+type DashboardRequest struct {
+	Hostname string `json:"hostname"`
+	Username string `json:"username"`
+}
+
+// Add these handler functions to your main.go
+
+// Get dashboard overview statistics
+func getDashboardOverview(ctx echo.Context) error {
+	var req DashboardRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Gather container statistics
+	containerCmd := "docker ps -a --format '{{.Status}}' | wc -l && docker ps --format '{{.Status}}' | wc -l"
+	containerOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, containerCmd)
+	if err != nil {
+		logger.Errorf("Error getting container stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get container statistics: %v", err),
+		})
+	}
+
+	// Parse container counts
+	containerLines := strings.Split(strings.TrimSpace(string(containerOutput)), "\n")
+	totalContainers, runningContainers := 0, 0
+	if len(containerLines) >= 2 {
+		totalContainers, _ = strconv.Atoi(strings.TrimSpace(containerLines[0]))
+		runningContainers, _ = strconv.Atoi(strings.TrimSpace(containerLines[1]))
+	}
+
+	// Gather image statistics
+	imageCmd := "docker image ls --format '{{.Size}}' | wc -l && docker system df --format '{{.Size}}' | grep Images | awk '{print $4}'"
+	imageOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, imageCmd)
+	if err != nil {
+		logger.Errorf("Error getting image stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get image statistics: %v", err),
+		})
+	}
+
+	// Parse image counts and size
+	imageLines := strings.Split(strings.TrimSpace(string(imageOutput)), "\n")
+	totalImages := 0
+	imageSize := "0B"
+	if len(imageLines) >= 1 {
+		totalImages, _ = strconv.Atoi(strings.TrimSpace(imageLines[0]))
+		if len(imageLines) >= 2 {
+			imageSize = strings.TrimSpace(imageLines[1])
+		}
+	}
+
+	// Gather volume statistics
+	volumeCmd := "docker volume ls --format '{{.Name}}' | wc -l"
+	volumeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, volumeCmd)
+	if err != nil {
+		logger.Errorf("Error getting volume stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get volume statistics: %v", err),
+		})
+	}
+	totalVolumes, _ := strconv.Atoi(strings.TrimSpace(string(volumeOutput)))
+
+	// Gather network statistics
+	networkCmd := "docker network ls --format '{{.Name}}' | wc -l"
+	networkOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, networkCmd)
+	if err != nil {
+		logger.Errorf("Error getting network stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get network statistics: %v", err),
+		})
+	}
+	totalNetworks, _ := strconv.Atoi(strings.TrimSpace(string(networkOutput)))
+
+	// Gather compose project statistics
+	composeCmd := "docker ps --format '{{.Labels}}' | grep -o 'com.docker.compose.project=[^ ,]*' | sort | uniq | wc -l"
+	composeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, composeCmd)
+	if err != nil {
+		logger.Errorf("Error getting compose stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get compose statistics: %v", err),
+		})
+	}
+	totalCompose, _ := strconv.Atoi(strings.TrimSpace(string(composeOutput)))
+
+	// Build the response
+	overview := DashboardOverview{}
+	overview.Containers.Total = totalContainers
+	overview.Containers.Running = runningContainers
+	overview.Containers.Stopped = totalContainers - runningContainers
+	overview.Images.Total = totalImages
+	overview.Images.Size = imageSize
+	overview.Volumes.Total = totalVolumes
+	overview.Volumes.Size = "N/A" // Would need additional commands to calculate
+	overview.Networks.Total = totalNetworks
+	overview.ComposeProjects.Total = totalCompose
+	overview.ComposeProjects.Running = 0 // Would need additional logic to determine
+	overview.ComposeProjects.Partial = 0 // Would need additional logic to determine
+	overview.ComposeProjects.Stopped = 0 // Would need additional logic to determine
+
+	return ctx.JSON(http.StatusOK, overview)
+}
+
+// Get resource usage for containers and system
+func getDashboardResources(ctx echo.Context) error {
+	var req DashboardRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Get container resource usage with docker stats
+	statsCmd := "docker stats --no-stream --format 'table {{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}'"
+	statsOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, statsCmd)
+	if err != nil {
+		logger.Errorf("Error getting resource stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get resource statistics: %v", err),
+		})
+	}
+
+	// Parse stats output
+	lines := strings.Split(strings.TrimSpace(string(statsOutput)), "\n")
+	containers := make([]ContainerResource, 0)
+
+	// Skip the header row
+	for i := 1; i < len(lines); i++ {
+		fields := strings.Split(lines[i], "|")
+		if len(fields) < 7 {
+			continue
+		}
+
+		// Parse CPU percentage
+		cpuPerc := strings.TrimSpace(fields[2])
+		cpuValue, _ := strconv.ParseFloat(strings.TrimSuffix(cpuPerc, "%"), 64)
+
+		// Parse memory percentage
+		memPerc := strings.TrimSpace(fields[4])
+		memValue, _ := strconv.ParseFloat(strings.TrimSuffix(memPerc, "%"), 64)
+
+		container := ContainerResource{
+			ID:       strings.TrimSpace(fields[0]),
+			Name:     strings.TrimSpace(fields[1]),
+			CPUPerc:  cpuPerc,
+			CPUUsage: cpuValue,
+			MemUsage: strings.TrimSpace(fields[3]),
+			MemPerc:  memPerc,
+			MemValue: memValue,
+			NetIO:    strings.TrimSpace(fields[5]),
+			BlockIO:  strings.TrimSpace(fields[6]),
+		}
+
+		containers = append(containers, container)
+	}
+
+	// Get system resource usage (this is more complex and might require additional commands)
+	systemCmd := "echo $(top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}') $(free | grep Mem | awk '{print $3/$2 * 100}') $(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')"
+	systemOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, systemCmd)
+	if err != nil {
+		logger.Warnf("Error getting system stats, will use defaults: %v", err)
+		// Continue with default values
+	}
+
+	// Parse system resource usage
+	cpuUsage, memUsage, diskUsage := 0.0, 0.0, 0.0
+	systemFields := strings.Split(strings.TrimSpace(string(systemOutput)), " ")
+	if len(systemFields) >= 3 {
+		cpuUsage, _ = strconv.ParseFloat(systemFields[0], 64)
+		memUsage, _ = strconv.ParseFloat(systemFields[1], 64)
+		diskUsage, _ = strconv.ParseFloat(systemFields[2], 64)
+	}
+
+	// Build the response
+	resources := ResourcesResponse{
+		Containers: containers,
+	}
+	resources.System.CPUUsage = cpuUsage
+	resources.System.MemoryUsage = memUsage
+	resources.System.DiskUsage = diskUsage
+
+	return ctx.JSON(http.StatusOK, resources)
+}
+
+// Get Docker system information
+func getDashboardSystemInfo(ctx echo.Context) error {
+	var req DashboardRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Get Docker version and system info
+	infoCmd := "docker version --format '{{.Server.Version}}|{{.Server.APIVersion}}|{{.Server.Os}}|{{.Server.KernelVersion}}|{{.Server.Architecture}}' && docker info --format '{{.NCPU}}|{{.MemTotal}}|{{.DockerRootDir}}|{{.ContainersRuntime}}|{{.ExperimentalBuild}}'"
+	infoOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, infoCmd)
+	if err != nil {
+		logger.Errorf("Error getting system info: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get system information: %v", err),
+		})
+	}
+
+	// Parse system info
+	lines := strings.Split(strings.TrimSpace(string(infoOutput)), "\n")
+	if len(lines) < 2 {
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Invalid response format from server",
+		})
+	}
+
+	versionFields := strings.Split(lines[0], "|")
+	infoFields := strings.Split(lines[1], "|")
+
+	// Get server time
+	timeCmd := "date +'%Y-%m-%d %H:%M:%S %Z'"
+	timeOutput, _ := tunnelManager.ExecuteCommand(req.Username, req.Hostname, timeCmd)
+	serverTime := strings.TrimSpace(string(timeOutput))
+
+	// Build the response
+	info := SystemInfoResponse{
+		ServerTime: serverTime,
+	}
+
+	if len(versionFields) >= 5 {
+		info.DockerVersion = versionFields[0]
+		info.APIVersion = versionFields[1]
+		info.OS = versionFields[2]
+		info.Kernel = versionFields[3]
+		info.Architecture = versionFields[4]
+	}
+
+	if len(infoFields) >= 5 {
+		info.CPUs, _ = strconv.Atoi(infoFields[0])
+		memBytes, _ := strconv.ParseFloat(infoFields[1], 64)
+		info.Memory = fmt.Sprintf("%.2f GiB", memBytes/(1024*1024*1024))
+		info.DockerRoot = infoFields[2]
+		info.ContainersRoot = infoFields[3]
+		info.ExperimentalMode = infoFields[4] == "true"
+	}
+
+	return ctx.JSON(http.StatusOK, info)
+}
+
+// Get recent Docker events
+func getDashboardEvents(ctx echo.Context) error {
+	var req DashboardRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Get recent Docker events (last 50 events)
+	eventsCmd := "docker events --format '{{json .}}' --since 24h --until 0s | tail -50"
+	eventsOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, eventsCmd)
+	if err != nil {
+		logger.Errorf("Error getting Docker events: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": fmt.Sprintf("Failed to get Docker events: %v", err),
+		})
+	}
+
+	// Parse events
+	lines := strings.Split(strings.TrimSpace(string(eventsOutput)), "\n")
+	events := make([]DockerEvent, 0)
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		// Try to parse the event JSON
+		var event struct {
+			Time   int64  `json:"time"`
+			Status string `json:"status"`
+			ID     string `json:"id"`
+			From   string `json:"from"`
+			Type   string `json:"Type"`
+			Actor  struct {
+				ID         string            `json:"ID"`
+				Attributes map[string]string `json:"Attributes"`
+			} `json:"Actor"`
+		}
+
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			logger.Warnf("Failed to parse event: %v", err)
+			continue
+		}
+
+		// Determine category (info, warning, error)
+		category := "info"
+		if strings.Contains(event.Status, "kill") || strings.Contains(event.Status, "die") {
+			category = "warning"
+		} else if strings.Contains(event.Status, "destroy") || strings.Contains(event.Status, "delete") {
+			category = "error"
+		}
+
+		// Convert time to readable format
+		timeStr := time.Unix(event.Time, 0).Format("2006-01-02 15:04:05")
+
+		// Extract name from attributes if available
+		name := event.ID
+		if event.Actor.Attributes != nil {
+			if n, ok := event.Actor.Attributes["name"]; ok {
+				name = n
+			}
+		}
+
+		// Create the event
+		dockerEvent := DockerEvent{
+			Time:     event.Time,
+			TimeStr:  timeStr,
+			Type:     event.Type,
+			Action:   event.Status,
+			Actor:    name,
+			Status:   "success", // Assuming success since it was recorded
+			Message:  event.From,
+			Category: category,
+		}
+
+		events = append(events, dockerEvent)
+	}
+
+	// Sort events by time (newest first)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Time > events[j].Time
+	})
+
+	return ctx.JSON(http.StatusOK, EventsResponse{Events: events})
 }
 
 // Request for container logs
