@@ -591,7 +591,7 @@ export function App() {
             component="div"
             sx={{
               fontSize: '1rem',
-              fontWeight: 600
+              fontWeight: (theme) => theme.typography.fontWeightMedium
             }}
           >
             Remote Docker

@@ -279,7 +279,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
             Your Environments
           </Typography>
           <Button
-            variant="contained"
+            variant="outlined"
             onClick={handleOpenAddDialog}
             disabled={isLoading}
           >
@@ -326,6 +326,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
                   <CardActions>
                     <Button
                       size="small"
+                      variant="outlined"
                       onClick={() => handleSetActive(env)}
                       disabled={settings.activeEnvironmentId === env.id || isLoading}
                     >
@@ -382,7 +383,12 @@ const Environments: React.FC<EnvironmentsProps> = ({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialogs} disabled={isLoading}>Cancel</Button>
+          <Button
+            onClick={handleCloseDialogs}
+            variant="outlined"
+            disabled={isLoading}
+          >Cancel
+          </Button>
           <Button
             onClick={handleAddEnvironment}
             variant="contained"
@@ -419,7 +425,13 @@ const Environments: React.FC<EnvironmentsProps> = ({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialogs} disabled={isLoading}>Cancel</Button>
+          <Button
+            onClick={handleCloseDialogs}
+            variant="outlined"
+            disabled={isLoading}
+          >
+            Cancel
+          </Button>
           <Button
             onClick={handleEditEnvironment}
             variant="contained"
