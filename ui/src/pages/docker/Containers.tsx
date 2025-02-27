@@ -23,6 +23,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { Environment, ExtensionSettings } from '../../App';
 import AutoRefreshControls from '../../components/AutoRefreshControls';
 import ContainerLogs from './ContainerLogs';
+import ConfirmationDialog from '../../components/ConfirmationDialog';
 
 // Container interface
 interface Container {
@@ -70,6 +71,13 @@ const Containers: React.FC<ContainersProps> = ({
 
   // Container logs states
   const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
+
+  // Confirmation dialog states
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'start' | 'stop';
+    container: Container | null;
+  }>({ type: 'start', container: null });
 
   // Load containers when active environment changes
   useEffect(() => {
@@ -251,6 +259,37 @@ const Containers: React.FC<ContainersProps> = ({
     setSelectedContainer(null);
   };
 
+  // Handle action confirmation
+  const handleConfirmAction = () => {
+    if (!confirmAction.container) return;
+
+    if (confirmAction.type === 'start') {
+      startContainer(confirmAction.container.id);
+    } else if (confirmAction.type === 'stop') {
+      stopContainer(confirmAction.container.id);
+    }
+
+    setConfirmDialogOpen(false);
+  };
+
+  // Open confirmation dialog for starting a container
+  const confirmStartContainer = (container: Container) => {
+    setConfirmAction({
+      type: 'start',
+      container: container
+    });
+    setConfirmDialogOpen(true);
+  };
+
+  // Open confirmation dialog for stopping a container
+  const confirmStopContainer = (container: Container) => {
+    setConfirmAction({
+      type: 'stop',
+      container: container
+    });
+    setConfirmDialogOpen(true);
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -361,7 +400,7 @@ const Containers: React.FC<ContainersProps> = ({
                             <IconButton
                               size="small"
                               color="error"
-                              onClick={() => stopContainer(container.id)}
+                              onClick={() => confirmStopContainer(container)}
                               disabled={isRefreshing || isLogsOpen}
                             >
                               <StopIcon fontSize="small" />
@@ -372,7 +411,7 @@ const Containers: React.FC<ContainersProps> = ({
                             <IconButton
                               size="small"
                               color="success"
-                              onClick={() => startContainer(container.id)}
+                              onClick={() => confirmStartContainer(container)}
                               disabled={isRefreshing || isLogsOpen}
                             >
                               <PlayArrowIcon fontSize="small" />
@@ -418,6 +457,22 @@ const Containers: React.FC<ContainersProps> = ({
           </Box>
         )}
       </Drawer>
+
+      {/* Confirmation Dialog */}
+      <ConfirmationDialog
+        open={confirmDialogOpen}
+        title={confirmAction.type === 'start' ? 'Start Container' : 'Stop Container'}
+        message={
+          confirmAction.type === 'start'
+            ? 'Are you sure you want to start this container?'
+            : 'Are you sure you want to stop this container? Any running processes will be terminated.'
+        }
+        confirmText={confirmAction.type === 'start' ? 'Start' : 'Stop'}
+        confirmColor={confirmAction.type === 'start' ? 'success' : 'error'}
+        resourceName={confirmAction.container ? confirmAction.container.name : ''}
+        onConfirm={handleConfirmAction}
+        onCancel={() => setConfirmDialogOpen(false)}
+      />
     </Box>
   );
 };

@@ -19,6 +19,7 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Environment, ExtensionSettings } from '../../App';
 import AutoRefreshControls from '../../components/AutoRefreshControls';
+import ConfirmationDialog from '../../components/ConfirmationDialog';
 
 // Image interface
 interface Image {
@@ -57,6 +58,10 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
   const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
+  // Confirmation dialog states
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<Image | null>(null);
 
   // Load images when active environment changes
   useEffect(() => {
@@ -159,6 +164,51 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
       setIsLoading(false);
       setIsRefreshing(false);
     }
+  };
+
+  // Remove an image
+  const removeImage = async (imageId: string) => {
+    if (!activeEnvironment) return;
+
+    setIsRefreshing(true);
+    try {
+      if (!ddClient.extension?.vm?.service) {
+        throw new Error('Docker Desktop service not available');
+      }
+
+      // This would be the actual implementation once the API endpoint is available
+      const response = await ddClient.extension.vm.service.post('/image/remove', {
+        hostname: activeEnvironment.hostname,
+        username: activeEnvironment.username,
+        imageId: imageId
+      });
+
+      if (response && typeof response === 'object' && 'error' in response) {
+        const errorResponse = response as ErrorResponse;
+        throw new Error(errorResponse.error);
+      }
+
+      // Reload images after successful removal
+      await loadImages();
+    } catch (err: any) {
+      console.error('Failed to remove image:', err);
+      setError(`Failed to remove image: ${err.message || 'Unknown error'}`);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Confirmation dialog handlers
+  const confirmRemoveImage = (image: Image) => {
+    setSelectedImage(image);
+    setConfirmDialogOpen(true);
+  };
+
+  const handleConfirmRemove = () => {
+    if (selectedImage) {
+      removeImage(selectedImage.id);
+    }
+    setConfirmDialogOpen(false);
   };
 
   // Format byte size to human-readable format
@@ -282,6 +332,7 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
                         <IconButton
                           size="small"
                           color="error"
+                          onClick={() => confirmRemoveImage(image)}
                           disabled={isRefreshing}
                         >
                           <DeleteIcon fontSize="small" />
@@ -299,6 +350,22 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
           No images found in the selected environment.
         </Alert>
       ) : null}
+
+      {/* Confirmation Dialog */}
+      <ConfirmationDialog
+        open={confirmDialogOpen}
+        title="Remove Image"
+        message={
+          selectedImage?.repository === '<none>'
+            ? "Are you sure you want to remove this dangling image?"
+            : "Are you sure you want to remove this image? This will permanently delete the image from the remote host."
+        }
+        confirmText="Remove"
+        confirmColor="error"
+        resourceName={selectedImage ? `${selectedImage.repository}:${selectedImage.tag || 'latest'}` : ''}
+        onConfirm={handleConfirmRemove}
+        onCancel={() => setConfirmDialogOpen(false)}
+      />
     </Box>
   );
 };

@@ -20,6 +20,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import InfoIcon from '@mui/icons-material/Info';
 import { Environment, ExtensionSettings } from '../../App';
 import AutoRefreshControls from '../../components/AutoRefreshControls';
+import ConfirmationDialog from '../../components/ConfirmationDialog';
 
 // Network interface
 interface Network {
@@ -61,6 +62,10 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
   const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
+  // Confirmation dialog states
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [selectedNetwork, setSelectedNetwork] = useState<Network | null>(null);
 
   // Load networks when active environment changes
   useEffect(() => {
@@ -186,6 +191,19 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
     }
   };
 
+  // Confirmation dialog handlers
+  const confirmDeleteNetwork = (network: Network) => {
+    setSelectedNetwork(network);
+    setConfirmDialogOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (selectedNetwork) {
+      deleteNetwork(selectedNetwork.id);
+    }
+    setConfirmDialogOpen(false);
+  };
+
   // Auto-refresh handlers
   const handleAutoRefreshChange = (enabled: boolean) => {
     setAutoRefresh(enabled);
@@ -306,7 +324,7 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
                           <IconButton
                             size="small"
                             color="error"
-                            onClick={() => deleteNetwork(network.id)}
+                            onClick={() => confirmDeleteNetwork(network)}
                             disabled={isRefreshing}
                           >
                             <DeleteIcon fontSize="small" />
@@ -325,6 +343,20 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
           No networks found in the selected environment.
         </Alert>
       ) : null}
+
+      {/* Confirmation Dialog */}
+      <ConfirmationDialog
+        open={confirmDialogOpen}
+        title="Delete Network"
+        message={
+          "Are you sure you want to delete this network? Any containers still connected to this network will be disconnected."
+        }
+        confirmText="Delete"
+        confirmColor="error"
+        resourceName={selectedNetwork?.name || ''}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDialogOpen(false)}
+      />
     </Box>
   );
 };

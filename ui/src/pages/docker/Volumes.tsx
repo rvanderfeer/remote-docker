@@ -19,6 +19,7 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Environment, ExtensionSettings } from '../../App';
 import AutoRefreshControls from '../../components/AutoRefreshControls';
+import ConfirmationDialog from '../../components/ConfirmationDialog';
 
 // Volume interface
 interface Volume {
@@ -58,6 +59,10 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
   const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
+  // Confirmation dialog states
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [selectedVolume, setSelectedVolume] = useState<Volume | null>(null);
 
   // Load volumes when active environment changes
   useEffect(() => {
@@ -181,6 +186,19 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
       setError(`Failed to delete volume: ${err.message || 'Unknown error'}`);
       setIsRefreshing(false);
     }
+  };
+
+  // Confirmation dialog handlers
+  const confirmDeleteVolume = (volume: Volume) => {
+    setSelectedVolume(volume);
+    setConfirmDialogOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (selectedVolume) {
+      deleteVolume(selectedVolume.name);
+    }
+    setConfirmDialogOpen(false);
   };
 
   // Format volume size if available
@@ -324,7 +342,7 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
                         <IconButton
                           size="small"
                           color="error"
-                          onClick={() => deleteVolume(volume.name)}
+                          onClick={() => confirmDeleteVolume(volume)}
                           disabled={isRefreshing}
                         >
                           <DeleteIcon fontSize="small" />
@@ -342,6 +360,20 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
           No volumes found in the selected environment.
         </Alert>
       ) : null}
+
+      {/* Confirmation Dialog */}
+      <ConfirmationDialog
+        open={confirmDialogOpen}
+        title="Delete Volume"
+        message={
+          "Are you sure you want to delete this volume? All data stored in this volume will be permanently lost."
+        }
+        confirmText="Delete"
+        confirmColor="error"
+        resourceName={selectedVolume?.name || ''}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDialogOpen(false)}
+      />
     </Box>
   );
 };
