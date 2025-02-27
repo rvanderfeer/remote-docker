@@ -85,7 +85,8 @@ export function App() {
   const ddClient = useDockerDesktopClient();
   const [currentPage, setCurrentPage] = useState<PageKey>('dashboard');
   const [settings, setSettings] = useState<ExtensionSettings>({
-    environments: []
+    environments: [],
+    autoConnect: false,
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -121,9 +122,9 @@ export function App() {
       visibilityRef.current = isVisible;
 
       // If we return to the extension and have an active environment, ensure tunnel is open
-      if (isVisible && settings.activeEnvironmentId) {
+      if (isVisible && settings.activeEnvironmentId && settings.autoConnect) {
         const env = getActiveEnvironment();
-        if (env) {
+        if (env && settings.autoConnect) {
           checkAndOpenTunnel(env);
         }
       }
@@ -162,7 +163,7 @@ export function App() {
         const activeEnv = parsedSettings.environments.find(
           env => env.id === parsedSettings.activeEnvironmentId
         );
-        if (activeEnv) {
+        if (activeEnv && settings.autoConnect) {
           checkAndOpenTunnel(activeEnv);
         }
       }
