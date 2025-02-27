@@ -487,6 +487,21 @@ export function App() {
                 }}
               />
               {isTunnelActive ? 'SSH Connected' : 'SSH Disconnected'}
+              {isTunnelActive && (
+                <Button
+                  size="small"
+                  color="primary"
+                  variant="text"
+                  onClick={() => {
+                    const env = getActiveEnvironment();
+                    if (env) closeTunnel(env);
+                  }}
+                  disabled={isTunnelLoading}
+                  sx={{ ml: 1, py: 0, minWidth: 'auto' }}
+                >
+                  {isTunnelLoading ? 'Disconnecting...' : 'Disconnect'}
+                </Button>
+              )}
               {!isTunnelActive && (
                 <Button
                   size="small"
@@ -499,7 +514,7 @@ export function App() {
                   disabled={isTunnelLoading}
                   sx={{ ml: 1, py: 0, minWidth: 'auto' }}
                 >
-                  {isTunnelLoading ? 'Connecting...' : 'Reconnect'}
+                  {isTunnelLoading ? 'Connecting...' : 'Connect'}
                 </Button>
               )}
             </Box>
