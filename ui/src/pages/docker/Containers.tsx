@@ -409,6 +409,69 @@ const Containers: React.FC<ContainersProps> = ({
       </Stack>
     );
   };
+
+  const renderContainerRow = (container: DockerContainer) => {
+    return (
+      <TableRow key={container.id}>
+        <TableCell width="10%" sx={{ fontFamily: 'monospace' }}>
+          {container.id.substring(0, 12)}
+        </TableCell>
+        <TableCell width="15%">{container.name}</TableCell>
+        <TableCell width="15%">
+          <Chip
+            label={container.status}
+            color={isRunning(container.status) ? 'success' : 'default'}
+            size="small"
+            variant="outlined"
+          />
+        </TableCell>
+        <TableCell width="20%">{container.image}</TableCell>
+        <TableCell width="30%">
+          {renderPortBindings(container)}
+        </TableCell>
+        <TableCell width="10%" align="right">
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Tooltip title="View Logs">
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={() => viewContainerLogs(container)}
+                disabled={isRefreshing || isLogsOpen}
+                sx={{ mr: 1 }}
+              >
+                <VisibilityIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+
+            {isRunning(container.status) ? (
+              <Tooltip title="Stop Container">
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={() => confirmStopContainer(container)}
+                  disabled={isRefreshing || isLogsOpen}
+                >
+                  <StopIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            ) : (
+              <Tooltip title="Start Container">
+                <IconButton
+                  size="small"
+                  color="success"
+                  onClick={() => confirmStartContainer(container)}
+                  disabled={isRefreshing || isLogsOpen}
+                >
+                  <PlayArrowIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Box>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
   // --------------------------------------------------
   // Collapsible Row for Compose Group
   // --------------------------------------------------
@@ -418,100 +481,29 @@ const Containers: React.FC<ContainersProps> = ({
     // Renders the sub-table with containers
     const renderContainersTable = () => {
       return (
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell width="10%">Container ID</TableCell>
-              <TableCell width="15%">Name</TableCell>
-              <TableCell width="20%">Image</TableCell>
-              <TableCell width="15%">Status</TableCell>
-              <TableCell width="30%">Ports</TableCell>
-              <TableCell width="10%" align="right">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {group.containers.map(container => (
-              <TableRow key={container.id}>
-                <TableCell sx={{ fontFamily: 'monospace' }}>
-                  {container.id.substring(0, 12)}
-                </TableCell>
-                <TableCell>{container.name}</TableCell>
-                <TableCell>{container.image}</TableCell>
-                <TableCell>
-                  <Chip
-                    label={container.status}
-                    color={isRunning(container.status) ? 'success' : 'default'}
-                    size="small"
-                    variant="outlined"
-                  />
-                </TableCell>
-                <TableCell>
-                  {renderPortBindings(container)}
-                </TableCell>
-                <TableCell align="right">
-                  <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <Tooltip title="View Logs">
-                      <IconButton
-                        size="small"
-                        color="primary"
-                        onClick={() => viewContainerLogs(container)}
-                        disabled={isRefreshing || isLogsOpen}
-                        sx={{ mr: 1 }}
-                      >
-                        <VisibilityIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-
-                    {isRunning(container.status) ? (
-                      <Tooltip title="Stop Container">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => confirmStopContainer(container)}
-                          disabled={isRefreshing || isLogsOpen}
-                        >
-                          <StopIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    ) : (
-                      <Tooltip title="Start Container">
-                        <IconButton
-                          size="small"
-                          color="success"
-                          onClick={() => confirmStartContainer(container)}
-                          disabled={isRefreshing || isLogsOpen}
-                        >
-                          <PlayArrowIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </Box>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        group.containers.map(container => renderContainerRow(container))
       );
     };
 
     return (
       <>
-        {/* Top-level row for the Compose project */}
         <TableRow>
-          <TableCell>
+          <TableCell width="10%"></TableCell>
+          <TableCell width="15%">
             <IconButton
               size="small"
               onClick={() => setOpen(!open)}
-              sx={{ mr: 1 }}
             >
               {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
             </IconButton>
             <strong>{group.name}</strong>
           </TableCell>
-          <TableCell colSpan={4}>
+          <TableCell width="15%">
             <Chip label={group.status} color="default" size="small" variant="outlined" />
           </TableCell>
-          <TableCell align="right">
+          <TableCell width="20%"></TableCell>
+          <TableCell width="30%"></TableCell>
+          <TableCell width="10%" align="right">
             {/* Compose logs at the project level */}
             <Tooltip title="View Compose Logs">
               <IconButton
@@ -526,160 +518,15 @@ const Containers: React.FC<ContainersProps> = ({
           </TableCell>
         </TableRow>
 
-        {/* Collapsible sub-table for containers */}
-        <TableRow>
-          <TableCell style={{ padding: 0 }} colSpan={6}>
-            <Collapse in={open} timeout="auto" unmountOnExit>
-              <Box sx={{ margin: 1 }}>
-                {renderContainersTable()}
-              </Box>
-            </Collapse>
-          </TableCell>
-        </TableRow>
+        {
+          open && group.containers.length > 0 && (
+            group.containers.map(container => renderContainerRow(container))
+          )
+        }
       </>
     );
   };
 
-  // --------------------------------------------------
-  // Single row for "Ungrouped" containers
-  // (treated like a "compose group" row so it collapses too)
-  // --------------------------------------------------
-  const UngroupedRow: React.FC = () => {
-    const [open, setOpen] = useState(false);
-
-    if (ungroupedContainers.length === 0) {
-      return null;
-    }
-
-    const renderContainersTable = () => (
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell width="10%">Container ID</TableCell>
-            <TableCell width="15%">Name</TableCell>
-            <TableCell width="20%">Image</TableCell>
-            <TableCell width="15%">Status</TableCell>
-            <TableCell width="30%">Ports</TableCell>
-            <TableCell width="10%" align="right">Actions</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {ungroupedContainers.map(container => (
-            <TableRow key={container.id}>
-              <TableCell sx={{ fontFamily: 'monospace' }}>
-                {container.id.substring(0, 12)}
-              </TableCell>
-              <TableCell>{container.name}</TableCell>
-              <TableCell>{container.image}</TableCell>
-              <TableCell>
-                <Chip
-                  label={container.status}
-                  color={isRunning(container.status) ? 'success' : 'default'}
-                  size="small"
-                  variant="outlined"
-                />
-              </TableCell>
-              <TableCell>
-                {parsePortBindings(container.ports).length > 0 ? (
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
-                    {parsePortBindings(container.ports).map((pb, idx) => (
-                      <Chip
-                        key={idx}
-                        size="small"
-                        icon={<PortIcon />}
-                        label={
-                          pb.hostPort
-                            ? `${pb.hostPort}:${pb.containerPort}/${pb.protocol}`
-                            : `${pb.containerPort}/${pb.protocol}`
-                        }
-                        variant="outlined"
-                        color="info"
-                        sx={{ my: 0.5 }}
-                      />
-                    ))}
-                  </Stack>
-                ) : (
-                  <Typography variant="body2" color="text.secondary">None</Typography>
-                )}
-              </TableCell>
-              <TableCell align="right">
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Tooltip title="View Logs">
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={() => viewContainerLogs(container)}
-                      disabled={isRefreshing || isLogsOpen}
-                      sx={{ mr: 1 }}
-                    >
-                      <VisibilityIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  {isRunning(container.status) ? (
-                    <Tooltip title="Stop Container">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => confirmStopContainer(container)}
-                        disabled={isRefreshing || isLogsOpen}
-                      >
-                        <StopIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip title="Start Container">
-                      <IconButton
-                        size="small"
-                        color="success"
-                        onClick={() => confirmStartContainer(container)}
-                        disabled={isRefreshing || isLogsOpen}
-                      >
-                        <PlayArrowIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-                </Box>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    );
-
-    // We can compute a "status" for ungrouped if desired (like "N containers", or we can skip)
-    const statusLabel = `${ungroupedContainers.length} container(s)`;
-
-    return (
-      <>
-        <TableRow>
-          <TableCell>
-            <IconButton
-              size="small"
-              onClick={() => setOpen(!open)}
-              sx={{ mr: 1 }}
-            >
-              {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
-            </IconButton>
-            <strong>Ungrouped</strong>
-          </TableCell>
-          <TableCell colSpan={4}>
-            <Chip label={statusLabel} size="small" variant="outlined" />
-          </TableCell>
-          <TableCell />
-        </TableRow>
-
-        <TableRow>
-          <TableCell style={{ padding: 0 }} colSpan={6}>
-            <Collapse in={open} timeout="auto" unmountOnExit>
-              <Box sx={{ margin: 1 }}>
-                {renderContainersTable()}
-              </Box>
-            </Collapse>
-          </TableCell>
-        </TableRow>
-      </>
-    );
-  };
 
   // --------------------------------------------------
   // Render
@@ -749,9 +596,12 @@ const Containers: React.FC<ContainersProps> = ({
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableCell>Project / Container</TableCell>
-                  <TableCell colSpan={4}>Info</TableCell>
-                  <TableCell align="right">Actions</TableCell>
+                  <TableCell width="10%">Container ID</TableCell>
+                  <TableCell width="15%">Name</TableCell>
+                  <TableCell width="15%">Status</TableCell>
+                  <TableCell width="20%">Image</TableCell>
+                  <TableCell width="30%">Ports</TableCell>
+                  <TableCell width="10%" align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -761,7 +611,7 @@ const Containers: React.FC<ContainersProps> = ({
                 ))}
 
                 {/* Ungrouped */}
-                {ungroupedContainers.length > 0 && <UngroupedRow />}
+                {ungroupedContainers.length > 0 && ungroupedContainers.map(container => renderContainerRow(container))}
               </TableBody>
             </Table>
           </TableContainer>
