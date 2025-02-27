@@ -90,7 +90,7 @@ func main() {
 	}
 
 	// Start cleanup routine for idle connections (check every minute, timeout after 30 minutes)
-	tunnelManager.StartCleanupRoutine(1*time.Minute, 30*time.Minute)
+	tunnelManager.StartCleanupRoutine(1*time.Minute, 10*time.Minute)
 
 	logMiddleware := middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Skipper: middleware.DefaultSkipper,
