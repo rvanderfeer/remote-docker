@@ -433,7 +433,7 @@ export function App() {
         sx={{
           width: `calc(100% - ${drawerWidth}px)`,
           ml: `${drawerWidth}px`,
-          bgcolor: isLogsOpen ? 'rgba(0, 0, 0, 0.04) !important' : '#ffffff !important',
+          bgcolor: isLogsOpen ? 'primary.main' : 'inherit',
           color: 'text.primary',
           boxShadow: 'none',
           borderBottom: 1,
@@ -535,7 +535,7 @@ export function App() {
                   color: 'text.primary'
                 },
                 '& .MuiInputLabel-root': {
-                  color: 'rgba(0, 0, 0, 0.6)'
+                  color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)'
                 }
               }}
             >
