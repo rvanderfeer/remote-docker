@@ -32,7 +32,7 @@ type DockerContainer struct {
 }
 
 // Settings data file path
-const settingsFilePath = "/root/.docker-extension/settings.json"
+const settingsFilePath = "/root/docker-extension/settings.json"
 
 func main() {
 	var socketPath string
@@ -71,8 +71,454 @@ func main() {
 	router.GET("/settings", getSettings)
 	// Save settings
 	router.POST("/settings", saveSettings)
+	// Container management endpoints
+	router.POST("/container/start", startContainer)
+	router.POST("/container/stop", stopContainer)
+
+	// Image management endpoints
+	router.POST("/images/list", listImages)
+
+	// Volume management endpoints
+	router.POST("/volumes/list", listVolumes)
+	router.POST("/volumes/remove", removeVolume)
+
+	// Network management endpoints
+	router.POST("/networks/list", listNetworks)
+	router.POST("/networks/remove", removeNetwork)
 
 	logger.Fatal(router.Start(startURL))
+}
+
+// Request for volume operations
+type VolumeRequest struct {
+	Hostname   string `json:"hostname"`
+	Username   string `json:"username"`
+	VolumeName string `json:"volumeName"`
+}
+
+// Request for network operations
+type NetworkRequest struct {
+	Hostname  string `json:"hostname"`
+	Username  string `json:"username"`
+	NetworkId string `json:"networkId"`
+}
+
+// List volumes
+func listVolumes(ctx echo.Context) error {
+	var req struct {
+		Hostname string `json:"hostname"`
+		Username string `json:"username"`
+	}
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and list volumes
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	// First, we'll get volume names and driver info
+	dockerCommand := "docker volume ls --format '{{.Name}}|{{.Driver}}'"
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error listing volumes: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to list volumes: %v", err),
+			"output": string(output),
+		})
+	}
+
+	// Parse the output into volume objects
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	volumes := make([]map[string]interface{}, 0, len(lines))
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) != 2 {
+			logger.Errorf("Invalid format for volume info: %s", line)
+			continue
+		}
+
+		volumeName := parts[0]
+		driver := parts[1]
+
+		// Now get detailed info about this volume
+		inspectCmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand,
+			fmt.Sprintf("docker volume inspect %s", volumeName))
+
+		inspectOutput, inspectErr := inspectCmd.CombinedOutput()
+
+		mountpoint := "N/A"
+		created := "N/A"
+		labels := []string{}
+
+		// If we can get inspect data, extract more info
+		if inspectErr == nil && len(inspectOutput) > 0 {
+			// Simple parsing approach - in production you'd want to properly parse JSON
+			inspectStr := string(inspectOutput)
+
+			// Extract mountpoint
+			if mountStart := strings.Index(inspectStr, "\"Mountpoint\": \""); mountStart > 0 {
+				mountStart += 15 // Length of "Mountpoint": "
+				if mountEnd := strings.Index(inspectStr[mountStart:], "\""); mountEnd > 0 {
+					mountpoint = inspectStr[mountStart : mountStart+mountEnd]
+				}
+			}
+
+			// Extract creation time if available
+			if createdStart := strings.Index(inspectStr, "\"CreatedAt\": \""); createdStart > 0 {
+				createdStart += 14 // Length of "CreatedAt": "
+				if createdEnd := strings.Index(inspectStr[createdStart:], "\""); createdEnd > 0 {
+					created = inspectStr[createdStart : createdStart+createdEnd]
+				}
+			}
+
+			// Extract labels
+			if labelsStart := strings.Index(inspectStr, "\"Labels\": {"); labelsStart > 0 {
+				labelsStart += 11 // Length of "Labels": {
+				if labelsEnd := strings.Index(inspectStr[labelsStart:], "}"); labelsEnd > 0 {
+					labelsSection := inspectStr[labelsStart : labelsStart+labelsEnd]
+					labelPairs := strings.Split(labelsSection, ",")
+					for _, pair := range labelPairs {
+						if pair = strings.TrimSpace(pair); pair != "" {
+							labels = append(labels, pair)
+						}
+					}
+				}
+			}
+		}
+
+		volume := map[string]interface{}{
+			"name":       volumeName,
+			"driver":     driver,
+			"mountpoint": mountpoint,
+			"created":    created,
+			"size":       "N/A", // Size would require more complex commands to determine
+			"labels":     labels,
+		}
+		volumes = append(volumes, volume)
+	}
+
+	return ctx.JSON(http.StatusOK, volumes)
+}
+
+// Remove a volume
+func removeVolume(ctx echo.Context) error {
+	var req VolumeRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" || req.VolumeName == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and remove volume
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	dockerCommand := fmt.Sprintf("docker volume rm %s", req.VolumeName)
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error removing volume: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to remove volume: %v", err),
+			"output": string(output),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+		"message": fmt.Sprintf("Volume %s removed", req.VolumeName),
+	})
+}
+
+// List networks
+func listNetworks(ctx echo.Context) error {
+	var req struct {
+		Hostname string `json:"hostname"`
+		Username string `json:"username"`
+	}
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and list networks
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	// Format: ID|Name|Driver|Scope
+	dockerCommand := "docker network ls --format '{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}'"
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error listing networks: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to list networks: %v", err),
+			"output": string(output),
+		})
+	}
+
+	// Parse the output into network objects
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	networks := make([]map[string]interface{}, 0, len(lines))
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) != 4 {
+			logger.Errorf("Invalid format for network info: %s", line)
+			continue
+		}
+
+		networkId := parts[0]
+		name := parts[1]
+		driver := parts[2]
+		scope := parts[3]
+
+		// Now get detailed info about this network
+		inspectCmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand,
+			fmt.Sprintf("docker network inspect %s", networkId))
+
+		inspectOutput, inspectErr := inspectCmd.CombinedOutput()
+
+		subnet := ""
+		gateway := ""
+		ipamDriver := "default"
+		internal := false
+
+		// If we can get inspect data, extract more info
+		if inspectErr == nil && len(inspectOutput) > 0 {
+			// Simple parsing approach - in production you'd want to properly parse JSON
+			inspectStr := string(inspectOutput)
+
+			// Extract IPAM driver
+			if driverStart := strings.Index(inspectStr, "\"Driver\": \""); driverStart > 0 {
+				driverStart += 11 // Length of "Driver": "
+				if driverEnd := strings.Index(inspectStr[driverStart:], "\""); driverEnd > 0 {
+					ipamDriver = inspectStr[driverStart : driverStart+driverEnd]
+				}
+			}
+
+			// Extract subnet
+			if subnetStart := strings.Index(inspectStr, "\"Subnet\": \""); subnetStart > 0 {
+				subnetStart += 11 // Length of "Subnet": "
+				if subnetEnd := strings.Index(inspectStr[subnetStart:], "\""); subnetEnd > 0 {
+					subnet = inspectStr[subnetStart : subnetStart+subnetEnd]
+				}
+			}
+
+			// Extract gateway
+			if gatewayStart := strings.Index(inspectStr, "\"Gateway\": \""); gatewayStart > 0 {
+				gatewayStart += 12 // Length of "Gateway": "
+				if gatewayEnd := strings.Index(inspectStr[gatewayStart:], "\""); gatewayEnd > 0 {
+					gateway = inspectStr[gatewayStart : gatewayStart+gatewayEnd]
+				}
+			}
+
+			// Check if internal
+			internal = strings.Contains(inspectStr, "\"Internal\": true")
+		}
+
+		network := map[string]interface{}{
+			"id":         networkId,
+			"name":       name,
+			"driver":     driver,
+			"scope":      scope,
+			"ipamDriver": ipamDriver,
+			"subnet":     subnet,
+			"gateway":    gateway,
+			"internal":   internal,
+		}
+		networks = append(networks, network)
+	}
+
+	return ctx.JSON(http.StatusOK, networks)
+}
+
+// Remove a network
+func removeNetwork(ctx echo.Context) error {
+	var req NetworkRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" || req.NetworkId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and remove network
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	dockerCommand := fmt.Sprintf("docker network rm %s", req.NetworkId)
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error removing network: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to remove network: %v", err),
+			"output": string(output),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+		"message": fmt.Sprintf("Network %s removed", req.NetworkId),
+	})
+}
+
+// Request for container operations
+type ContainerRequest struct {
+	Hostname    string `json:"hostname"`
+	Username    string `json:"username"`
+	ContainerId string `json:"containerId"`
+}
+
+// Start a container
+func startContainer(ctx echo.Context) error {
+	var req ContainerRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" || req.ContainerId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and start container
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	dockerCommand := fmt.Sprintf("docker start %s", req.ContainerId)
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error starting container: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to start container: %v", err),
+			"output": string(output),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+		"message": fmt.Sprintf("Container %s started", req.ContainerId),
+	})
+}
+
+// Stop a container
+func stopContainer(ctx echo.Context) error {
+	var req ContainerRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" || req.ContainerId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and stop container
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	dockerCommand := fmt.Sprintf("docker stop %s", req.ContainerId)
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error stopping container: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to stop container: %v", err),
+			"output": string(output),
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+		"message": fmt.Sprintf("Container %s stopped", req.ContainerId),
+	})
+}
+
+// List images
+func listImages(ctx echo.Context) error {
+	var req struct {
+		Hostname string `json:"hostname"`
+		Username string `json:"username"`
+	}
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// SSH to remote host and list images
+	sshCommand := fmt.Sprintf("%s@%s", req.Username, req.Hostname)
+	// Format: ID|Repository|Tag|Created|Size
+	dockerCommand := "docker images --format '{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedSince}}|{{.Size}}'"
+
+	cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", sshCommand, dockerCommand)
+	logger.Infof("Executing: ssh -o StrictHostKeyChecking=no %s %s", sshCommand, dockerCommand)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Errorf("Error listing images: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to list images: %v", err),
+			"output": string(output),
+		})
+	}
+
+	// Parse the output into image objects
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	images := make([]map[string]string, 0, len(lines))
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) != 5 {
+			logger.Errorf("Invalid format for image info: %s", line)
+			continue
+		}
+
+		image := map[string]string{
+			"id":         parts[0],
+			"repository": parts[1],
+			"tag":        parts[2],
+			"created":    parts[3],
+			"size":       parts[4],
+		}
+		images = append(images, image)
+	}
+
+	return ctx.JSON(http.StatusOK, images)
 }
 
 // Get settings from file

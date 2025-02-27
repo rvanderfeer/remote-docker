@@ -219,12 +219,6 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
           No images found in the selected environment.
         </Alert>
       ) : null}
-
-      {/* Note about implementation status */}
-      <Typography variant="caption" sx={{ display: 'block', mt: 4, color: 'text.secondary' }}>
-        Note: The Images API endpoint needs to be implemented in your backend.
-        You'll need to add a new route in your Go backend to fetch image data from remote Docker.
-      </Typography>
     </Box>
   );
 };

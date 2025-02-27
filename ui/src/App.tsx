@@ -251,26 +251,60 @@ export function App() {
     <Box sx={{ display: 'flex' }}>
       <CssBaseline />
 
-      {/* App bar */}
+      {/* App bar - FIXED STYLING */}
       <AppBar
         position="fixed"
         sx={{
           width: `calc(100% - ${drawerWidth}px)`,
           ml: `${drawerWidth}px`,
+          // Using the Docker Desktop style which is a very light gray with subtle border
           bgcolor: 'background.paper',
           color: 'text.primary',
-          borderBottom: `1px solid ${theme.palette.divider}`
+          boxShadow: 'none',
+          borderBottom: 1,
+          borderColor: 'divider',
+          zIndex: (theme) => theme.zIndex.drawer + 1
         }}
-        elevation={0}
       >
-        <Toolbar>
-          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+        <Toolbar sx={{ minHeight: '56px' }}>
+          <Typography
+            variant="h6"
+            noWrap
+            component="div"
+            sx={{
+              flexGrow: 1,
+              fontSize: '1rem',
+              fontWeight: 500,
+              color: theme.palette.mode === 'dark' ? 'white' : 'inherit'
+            }}
+          >
             {navItems.find(item => item.key === currentPage)?.label || 'Remote Docker'}
           </Typography>
 
-          {/* Environment selector dropdown (only show for docker resource pages) */}
+          {/* Environment selector dropdown - FIXED STYLING */}
           {currentPage !== 'environments' && settings.environments.length > 0 && (
-            <FormControl sx={{ minWidth: 200 }} size="small">
+            <FormControl
+              variant="outlined"
+              size="small"
+              sx={{
+                minWidth: 180,
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: 1,
+                  backgroundColor: theme.palette.mode === 'dark'
+                    ? 'rgba(255, 255, 255, 0.05)'
+                    : 'rgba(0, 0, 0, 0.03)'
+                },
+                '& .MuiSelect-select': {
+                  py: 1,
+                  // Ensure text is visible
+                  color: theme.palette.mode === 'dark' ? 'white' : 'text.primary'
+                },
+                '& .MuiInputLabel-root': {
+                  // Ensure label is visible
+                  color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)'
+                }
+              }}
+            >
               <InputLabel id="environment-select-label">Environment</InputLabel>
               <Select
                 labelId="environment-select-label"
@@ -297,30 +331,59 @@ export function App() {
           '& .MuiDrawer-paper': {
             width: drawerWidth,
             boxSizing: 'border-box',
+            borderRight: 1,
+            borderColor: 'divider'
           },
         }}
         variant="permanent"
         anchor="left"
       >
-        <Toolbar>
-          <Typography variant="h6" noWrap component="div">
+        <Toolbar sx={{
+          minHeight: '56px',
+          px: 2,
+          borderBottom: 1,
+          borderColor: 'divider'
+        }}>
+          <Typography
+            variant="h6"
+            noWrap
+            component="div"
+            sx={{
+              fontSize: '1rem',
+              fontWeight: 600
+            }}
+          >
             Remote Docker
           </Typography>
         </Toolbar>
-        <Divider />
 
         {/* Docker resources section */}
-        <List>
+        <List sx={{ py: 0 }}>
           {navItems.filter(item => item.category === 'docker').map((item) => (
             <ListItem key={item.key} disablePadding>
               <ListItemButton
                 selected={currentPage === item.key}
                 onClick={() => setCurrentPage(item.key)}
+                sx={{
+                  py: 1,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: theme.palette.mode === 'dark'
+                      ? 'rgba(255, 255, 255, 0.08)'
+                      : 'rgba(0, 0, 0, 0.06)'
+                  }
+                }}
               >
-                <ListItemIcon>
+                <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>
                   {item.icon}
                 </ListItemIcon>
-                <ListItemText primary={item.label} />
+                <ListItemText
+                  primary={item.label}
+                  primaryTypographyProps={{
+                    fontSize: '0.875rem',
+                    fontWeight: currentPage === item.key ? 500 : 400
+                  }}
+                />
               </ListItemButton>
             </ListItem>
           ))}
@@ -328,17 +391,32 @@ export function App() {
         <Divider />
 
         {/* Settings section */}
-        <List>
+        <List sx={{ py: 0 }}>
           {navItems.filter(item => item.category === 'settings').map((item) => (
             <ListItem key={item.key} disablePadding>
               <ListItemButton
                 selected={currentPage === item.key}
                 onClick={() => setCurrentPage(item.key)}
+                sx={{
+                  py: 1,
+                  minHeight: 48,
+                  '&.Mui-selected': {
+                    backgroundColor: theme.palette.mode === 'dark'
+                      ? 'rgba(255, 255, 255, 0.08)'
+                      : 'rgba(0, 0, 0, 0.06)'
+                  }
+                }}
               >
-                <ListItemIcon>
+                <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>
                   {item.icon}
                 </ListItemIcon>
-                <ListItemText primary={item.label} />
+                <ListItemText
+                  primary={item.label}
+                  primaryTypographyProps={{
+                    fontSize: '0.875rem',
+                    fontWeight: currentPage === item.key ? 500 : 400
+                  }}
+                />
               </ListItemButton>
             </ListItem>
           ))}
@@ -348,7 +426,12 @@ export function App() {
       {/* Main content */}
       <Box
         component="main"
-        sx={{ flexGrow: 1, bgcolor: 'background.default', p: 3, marginTop: 8 }}
+        sx={{
+          flexGrow: 1,
+          p: 3,
+          mt: '56px', // Matches the toolbar height
+          overflow: 'auto'
+        }}
       >
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
