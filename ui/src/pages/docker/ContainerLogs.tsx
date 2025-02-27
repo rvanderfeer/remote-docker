@@ -15,21 +15,20 @@ import {
 import VerticalAlignBottomIcon from '@mui/icons-material/VerticalAlignBottom';
 import CloseIcon from '@mui/icons-material/Close';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
 import { Environment } from '../../App';
 
-// Error response interface
 interface ErrorResponse {
   error: string;
   output?: string;
 }
 
-// This interface matches what our Go backend returns: { logs: string[] }
 interface ContainerLogsResponse {
   success?: boolean;
   logs: string[];
 }
 
-// Props passed to our component
 interface ContainerLogsProps {
   activeEnvironment?: Environment;
   containerId: string;
@@ -63,11 +62,10 @@ const ansiToColorClass: Record<string, string> = {
   '97': 'log-bright-white',
 };
 
-// Replaces ANSI color codes with span tags referencing the CSS classes
 function colorizeLog(line: string): string {
   // Basic ANSI color code regex: \u001b\[(3[0-7]|9[0-7])m
   const colorCodeRegex = /\u001b\[(3[0-7]|9[0-7])m(.*?)(\u001b\[0m|\u001b\[39m)/g;
-  return line.replace(colorCodeRegex, (_, colorCode, text) => {
+  return line.replace(colorCodeRegex, (_match, colorCode, text) => {
     const className = ansiToColorClass[colorCode] || '';
     return `<span class="${className}">${text}</span>`;
   });
@@ -87,27 +85,27 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // Already existing toggles in your UI
+  // Existing toggles
   const [follow, setFollow] = useState(true);
   const [tailLines, setTailLines] = useState(100);
   const [timestamps] = useState(true);
 
-  // Refs for UI
+  // New state for font size
+  const [logFontSize, setLogFontSize] = useState<number>(0.75);
+
+  // Refs
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
 
-  // Polling interval, e.g. 3 seconds or 5 seconds
   const POLL_INTERVAL_MS = 1000;
   const pollTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // Function to scroll to the bottom
   const scrollToBottom = () => {
     if (logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
-  // Determine if user manually scrolled away from bottom
   const handleScroll = () => {
     if (!logsContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = logsContainerRef.current;
@@ -117,20 +115,19 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     }
   };
 
-  // Auto-scroll if needed
   useEffect(() => {
     if (autoScroll && logs.length > 0) {
       scrollToBottom();
     }
   }, [logs, autoScroll]);
 
-  // Start or stop polling whenever "follow" changes, or environment/container changes
   useEffect(() => {
     // Clear any existing timer
     if (pollTimer.current) {
       clearInterval(pollTimer.current);
       pollTimer.current = null;
     }
+
     setLogs([]);
     setError('');
     setIsLoading(true);
@@ -145,13 +142,12 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     if (follow) {
       // Immediately fetch once
       fetchLogs();
-
       // Then set up repeated polling
       pollTimer.current = setInterval(() => {
-        fetchLogs(false); // pass false so it doesn’t reset logs
+        fetchLogs(false);
       }, POLL_INTERVAL_MS);
     } else {
-      // If follow is off, do one fetch so user sees some logs
+      // If follow is off, do one fetch
       fetchLogs();
     }
 
@@ -162,12 +158,10 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     };
   }, [activeEnvironment, containerId, follow, tailLines, timestamps]);
 
-  // Manual reload
   const handleReload = () => {
-    fetchLogs(true); // maybe reset logs
+    fetchLogs(true);
   };
 
-  // The core function to fetch logs from backend
   const fetchLogs = async (resetLogs = true) => {
     if (!activeEnvironment) {
       setError('No environment selected');
@@ -180,12 +174,10 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         setLogs([]);
       }
 
-      // Check if Docker Desktop service is available
       if (!ddClient.extension?.vm?.service) {
         throw new Error('Docker Desktop service not available');
       }
 
-      // Make API call to fetch logs
       const response = (await ddClient.extension.vm.service.post('/container/logs', {
         hostname: activeEnvironment.hostname,
         username: activeEnvironment.username,
@@ -194,21 +186,15 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         timestamps: timestamps,
       })) as ContainerLogsResponse;
 
-      // Check for error response
       if (response && typeof response === 'object' && 'error' in response) {
         const errorResponse = response as ErrorResponse;
         throw new Error(errorResponse.error);
       }
 
-
-      // We have an array of lines from the backend (last X lines).
-      // If you want to store them all, you'll do some merging logic:
       setLogs((prev) => {
-        // If we reset logs (like on reload), just return new lines
         if (resetLogs || prev.length === 0) {
           return response.logs;
         }
-        // Otherwise, let's only append lines that are truly new
         return mergeNewLines(prev, response.logs);
       });
 
@@ -221,28 +207,23 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     }
   };
 
-  /**
-   * Merges new lines from the backend with our existing lines.
-   * We'll detect the last line of our existing logs in the new lines
-   * and append only lines after that. If it's not found, we append all.
-   */
   const mergeNewLines = (oldLines: string[], newLines: string[]): string[] => {
     if (oldLines.length === 0) return newLines;
-
     const lastOld = oldLines[oldLines.length - 1];
     const idx = newLines.indexOf(lastOld);
     if (idx === -1) {
-      // No match => everything is new
       return [...oldLines, ...newLines];
     } else if (idx === newLines.length - 1) {
-      // The old last line is the last line in new => nothing to append
       return oldLines;
     } else {
-      // Some lines after idx are new
       const toAppend = newLines.slice(idx + 1);
       return [...oldLines, ...toAppend];
     }
   };
+
+  // Font size increment/decrement
+  const increaseFontSize = () => setLogFontSize((prev) => Math.min(prev + 0.1, 2));
+  const decreaseFontSize = () => setLogFontSize((prev) => Math.max(prev - 0.1, 0.5));
 
   return (
     <Box
@@ -284,7 +265,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
             sx={{ mr: 0 }}
           />
 
-          {/* tail lines input */}
+          {/* Tail lines input */}
           <TextField
             type="number"
             label="Tail lines"
@@ -296,6 +277,18 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
             }}
             sx={{ width: 100 }}
           />
+
+          {/* Font size controls */}
+          <Tooltip title="Decrease font size">
+            <IconButton onClick={decreaseFontSize} size="small">
+              <RemoveIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Increase font size">
+            <IconButton onClick={increaseFontSize} size="small">
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
 
           <Tooltip title="Reload logs">
             <IconButton onClick={handleReload} disabled={isLoading} size="small">
@@ -334,7 +327,8 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           color: '#d4d4d4',
           p: 1,
           fontFamily: 'monospace',
-          fontSize: '0.85rem',
+          // Apply dynamic font size here
+          fontSize: `${logFontSize}rem`,
           position: 'relative',
           '& .log-black': { color: '#000000' },
           '& .log-red': { color: '#cd3131' },
@@ -356,7 +350,6 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         ref={logsContainerRef}
         onScroll={handleScroll}
       >
-        {/* Show spinner if loading and no logs yet */}
         {isLoading && logs.length === 0 ? (
           <Box
             sx={{
@@ -391,7 +384,6 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
                   wordBreak: 'break-all',
                   borderBottom: '1px solid rgba(255,255,255,0.05)',
                 }}
-                // Colorize the line with ANSI classes
                 dangerouslySetInnerHTML={{
                   __html: colorizeLog(line),
                 }}
