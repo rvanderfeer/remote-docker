@@ -23,12 +23,14 @@ COPY ui /ui
 RUN npm run build
 
 FROM alpine
-LABEL org.opencontainers.image.title="Remote Docker" \
-    org.opencontainers.image.description="A Docker Desktop extension for managing and monitoring remote Docker environments via SSH tunneling." \
-    org.opencontainers.image.vendor="Ege Kocabaş" \
-    com.docker.desktop.extension.api.version="0.3.4" \
-    com.docker.desktop.extension.icon="https://github.com/egekocabas/remote-docker/blob/main/assets/extension-icon.svg" \
-    com.docker.extension.screenshots="[\
+LABEL org.opencontainers.image.title="Remote Docker"
+LABEL org.opencontainers.image.description="A Docker Desktop extension for managing and monitoring remote Docker environments via SSH tunneling."
+LABEL org.opencontainers.image.vendor="Ege Kocabaş"
+LABEL com.docker.desktop.extension.api.version="0.3.4"
+LABEL com.docker.extension.categories="utility-tools,container-orchestration"
+LABEL com.docker.extension.account-info=""
+LABEL com.docker.desktop.extension.icon="https://raw.githubusercontent.com/egekocabas/remote-docker/refs/heads/main/assets/extension-icon.svg"
+LABEL com.docker.extension.screenshots="[\
      {\"alt\": \"Dashboard\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/01_dashboard.png\"},\
      {\"alt\": \"Containers\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/02_containers.png\"}, \
      {\"alt\": \"Compose logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/03_compose_logs.png\"}, \
@@ -38,8 +40,8 @@ LABEL org.opencontainers.image.title="Remote Docker" \
      {\"alt\": \"Environments\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/07_environments.png\"}, \
      {\"alt\": \"Environment Selection\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/08_environment_selection.png\"}, \
      {\"alt\": \"Disconnect\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/09_disconnect.png\"}, \
-     {\"alt\": \"Container Logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/10_container_logs.png\"}]" \
-    com.docker.extension.detailed-description="\
+     {\"alt\": \"Container Logs\", \"url\": \"https:\/\/raw.githubusercontent.com\/egekocabas\/remote-docker\/refs\/heads\/main\/assets\/10_container_logs.png\"}]"
+LABEL com.docker.extension.detailed-description="\
     A Docker Desktop extension that brings remote Docker management with a user-friendly UI.<br><br>\
     <b>Key Features:</b><br><br>\
     - Full remote Docker environment management via SSH tunneling<br>\
@@ -60,12 +62,11 @@ LABEL org.opencontainers.image.title="Remote Docker" \
     - Install the extension<br>\
     - Configure remote environments<br>\
     - Select a remote instance and start managing Docker remotely<br><br>\
-    <b>Warning:</b> Use this extension at your own risk. Always review the code and validate actions before running or installing it.<br><br>\
-    " \
-    com.docker.extension.publisher-url="https://github.com/egekocabas/remote-docker" \
-    com.docker.extension.additional-urls="[{\"title\":\"Project GitHub\",\"url\":\"https:\/\/github.com\/egekocabas\/remote-docker\"}]" \
-    com.docker.extension.changelog="Initial release" \
-    com.docker.extension.categories="utility-tools,container-orchestration"
+    <b>Warning:</b> Use this extension at your own risk. Always review the code and validate actions before running or installing it.<br><br>"
+LABEL com.docker.extension.publisher-url="https://github.com/egekocabas/remote-docker"
+LABEL com.docker.extension.additional-urls="[{\"title\":\"Project GitHub\",\"url\":\"https:\/\/github.com\/egekocabas\/remote-docker\"}]"
+LABEL com.docker.extension.changelog="Initial release"
+
 
 # Install SSH client
 RUN apk add --no-cache openssh-client docker
