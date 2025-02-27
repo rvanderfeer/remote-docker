@@ -42,33 +42,46 @@ function useDockerDesktopClient() {
   return client;
 }
 
-// ANSI color codes -> CSS classes
-const ansiToColorClass: Record<string, string> = {
-  '30': 'log-black',
-  '31': 'log-red',
-  '32': 'log-green',
-  '33': 'log-yellow',
-  '34': 'log-blue',
-  '35': 'log-magenta',
-  '36': 'log-cyan',
-  '37': 'log-white',
-  '90': 'log-gray',
-  '91': 'log-bright-red',
-  '92': 'log-bright-green',
-  '93': 'log-bright-yellow',
-  '94': 'log-bright-blue',
-  '95': 'log-bright-magenta',
-  '96': 'log-bright-cyan',
-  '97': 'log-bright-white',
-};
-
+/**
+ * Pattern-based log highlighting
+ * Recognizes levels (INFO, WARN, ERROR), HTTP methods/status,
+ * as well as known app messages (Spring, NATS, etc.),
+ * and timestamps with fractional seconds + optional trailing 'Z'.
+ */
 function colorizeLog(line: string): string {
-  // Basic ANSI color code regex: \u001b\[(3[0-7]|9[0-7])m
-  const colorCodeRegex = /\u001b\[(3[0-7]|9[0-7])m(.*?)(\u001b\[0m|\u001b\[39m)/g;
-  return line.replace(colorCodeRegex, (_match, colorCode, text) => {
-    const className = ansiToColorClass[colorCode] || '';
-    return `<span class="${className}">${text}</span>`;
+  const patterns: { regex: RegExp; className: string }[] = [
+    // Common log levels
+    { regex: /\b(INFO|DEBUG|TRACE)\b/, className: 'log-info' },
+    { regex: /\b(WARN)\b/, className: 'log-warn' },
+    { regex: /\b(ERROR|FATAL|CRITICAL)\b/, className: 'log-error' },
+
+    // HTTP methods/statuses
+    { regex: /\b(HTTP\/\d\.\d|\bGET\b|\bPOST\b|\bPUT\b|\bDELETE\b)\b/, className: 'log-http' },
+    {
+      regex: /\b(200 OK|301 Moved|302 Found|400 Bad Request|403 Forbidden|404 Not Found|500 Internal Server Error)\b/,
+      className: 'log-http-status'
+    },
+
+    // NATS
+    { regex: /\b(NATS Connected|NATS Disconnected|NATS Error)\b/, className: 'log-nats' },
+
+    // Spring Boot / Hibernate
+    { regex: /\b(Spring Boot started|Spring Context Loaded|Hibernate Initialized)\b/, className: 'log-spring' },
+
+    // Nginx
+    { regex: /\b(nginx error|nginx started|nginx stopped)\b/, className: 'log-nginx' },
+
+    // DB / Connection
+    { regex: /\b(connection refused|database error|timeout)\b/, className: 'log-db' },
+
+    // Timestamps (supports fractional seconds and optional trailing 'Z')
+    { regex: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z?/, className: 'log-timestamp' },
+  ];
+
+  patterns.forEach(({ regex, className }) => {
+    line = line.replace(regex, (match) => `<span class="${className}">${match}</span>`);
   });
+  return line;
 }
 
 const ContainerLogs: React.FC<ContainerLogsProps> = ({
@@ -89,7 +102,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const [tailLines, setTailLines] = useState(500);
   const [tempTailLines, setTempTailLines] = useState(tailLines);
 
-  // New state for font size
+  // Font size
   const [logFontSize, setLogFontSize] = useState<number>(0.75);
 
   // Refs
@@ -99,12 +112,14 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const POLL_INTERVAL_MS = 1000;
   const pollTimer = useRef<NodeJS.Timeout | null>(null);
 
+  // Auto-scroll to bottom if enabled
   const scrollToBottom = () => {
     if (logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
+  // Check if user scrolled away from bottom to toggle autoScroll
   const handleScroll = () => {
     if (!logsContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = logsContainerRef.current;
@@ -120,6 +135,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     }
   }, [logs, autoScroll]);
 
+  // Setup log polling
   useEffect(() => {
     // Clear any existing timer
     if (pollTimer.current) {
@@ -193,10 +209,12 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
       })) as ContainerLogsResponse;
 
       if (response && typeof response === 'object' && 'error' in response) {
+        // If the response shape includes an error field
         const errorResponse = response as ErrorResponse;
         throw new Error(errorResponse.error);
       }
 
+      // If no error, update logs
       setLogs((prev) => {
         if (resetLogs || prev.length === 0) {
           return response.logs;
@@ -213,6 +231,8 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     }
   };
 
+  // Merge newly fetched lines with existing lines
+  // to avoid duplicates and partial refreshes
   const mergeNewLines = (oldLines: string[], newLines: string[]): string[] => {
     if (oldLines.length === 0) return newLines;
     const lastOld = oldLines[oldLines.length - 1];
@@ -244,7 +264,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     if (isNaN(numericValue) || numericValue < 500) {
       numericValue = 500; // enforce minimum
     }
-    if(numericValue > 5000) {
+    if (numericValue > 5000) {
       numericValue = 5000; // enforce maximum
     }
     setTailLines(numericValue);
@@ -323,12 +343,14 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
             </IconButton>
           </Tooltip>
 
+          {/* Reload button */}
           <Tooltip title="Reload logs">
             <IconButton onClick={handleReload} disabled={isLoading} size="small">
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>
 
+          {/* Close button */}
           <Tooltip title="Close logs">
             <IconButton onClick={onClose} edge="end" size="small">
               <CloseIcon fontSize="small" />
@@ -354,29 +376,23 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
           color: '#d4d4d4',
           p: 1,
           fontFamily: 'monospace',
-          // Apply dynamic font size here
           fontSize: `${logFontSize}rem`,
           position: 'relative',
-          '& .log-black': { color: '#000000' },
-          '& .log-red': { color: '#cd3131' },
-          '& .log-green': { color: '#0dbc79' },
-          '& .log-yellow': { color: '#e5e510' },
-          '& .log-blue': { color: '#2472c8' },
-          '& .log-magenta': { color: '#bc3fbc' },
-          '& .log-cyan': { color: '#11a8cd' },
-          '& .log-white': { color: '#e5e5e5' },
-          '& .log-gray': { color: '#666666' },
-          '& .log-bright-red': { color: '#f14c4c' },
-          '& .log-bright-green': { color: '#23d18b' },
-          '& .log-bright-yellow': { color: '#f5f543' },
-          '& .log-bright-blue': { color: '#3b8eea' },
-          '& .log-bright-magenta': { color: '#d670d6' },
-          '& .log-bright-cyan': { color: '#29b8db' },
-          '& .log-bright-white': { color: '#ffffff' },
+          '& .log-info': { color: '#0dbc79' },
+          '& .log-warn': { color: '#e5e510' },
+          '& .log-error': { color: '#f14c4c' },
+          '& .log-http': { color: '#2472c8' },
+          '& .log-http-status': { color: '#bc3fbc' },
+          '& .log-nats': { color: '#11a8cd' },
+          '& .log-spring': { color: '#d670d6' },
+          '& .log-nginx': { color: '#f5f543' },
+          '& .log-db': { color: '#cd3131' },
+          '& .log-timestamp': { color: '#666666' },
         }}
         ref={logsContainerRef}
         onScroll={handleScroll}
       >
+        {/* Loading indicator if no logs yet */}
         {isLoading && logs.length === 0 ? (
           <Box
             sx={{
