@@ -169,6 +169,7 @@ export function App() {
     } catch (err: any) {
       console.error('Failed to load settings:', err);
       setError('Failed to load settings: ' + (err.message || 'Unknown error'));
+      ddClient.desktopUI.toast.error('Failed to load settings: ' + (err.message || 'Unknown error'));
       // Initialize with empty settings if loading fails
       setSettings({
         environments: []
@@ -202,6 +203,7 @@ export function App() {
     } catch (err: any) {
       console.error('Failed to save settings:', err);
       setError('Failed to save settings: ' + (err.message || 'Unknown error'));
+      ddClient.desktopUI.toast.error('Failed to save settings: ' + (err.message || 'Unknown error'));
       return false;
     }
   };
@@ -238,6 +240,7 @@ export function App() {
     } catch (err: any) {
       console.error('Failed to open SSH tunnel:', err);
       setTunnelError(`Failed to open SSH tunnel: ${err.message || 'Unknown error'}`);
+      ddClient.desktopUI.toast.error('Failed to open SSH tunnel: ' + (err.message || 'Unknown error'));
       setIsTunnelActive(false);
     } finally {
       setIsTunnelLoading(false);
@@ -345,15 +348,37 @@ export function App() {
   const renderPage = () => {
     const activeEnvironment = getActiveEnvironment();
 
+    if (currentPage === 'environments') {
+      return (
+        <Environments
+          settings={settings}
+          onSaveSettings={saveSettings}
+          onSetActiveEnvironment={setActiveEnvironment}
+        />
+      );
+    }
+    else if (currentPage === 'dashboard') {
+      return (
+        <Dashboard
+          activeEnvironment={activeEnvironment}
+          settings={settings}
+          onSetActiveEnvironment={setActiveEnvironment}
+        />
+      );
+    }
+
+    if (!isTunnelActive) {
+      return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+          <Alert severity="error">
+            SSH tunnel is not connected. Please select an environment to connect or try to reconnect.
+          </Alert>
+        </Box>
+      );
+    }
+
+
     switch (currentPage) {
-      case 'dashboard':
-        return (
-          <Dashboard
-            activeEnvironment={activeEnvironment}
-            settings={settings}
-            onSetActiveEnvironment={setActiveEnvironment}
-          />
-        );
       case 'containers':
         return (
           <Containers
@@ -382,14 +407,6 @@ export function App() {
           <Networks
             activeEnvironment={activeEnvironment}
             settings={settings}
-          />
-        );
-      case 'environments':
-        return (
-          <Environments
-            settings={settings}
-            onSaveSettings={saveSettings}
-            onSetActiveEnvironment={setActiveEnvironment}
           />
         );
       default:
@@ -528,22 +545,6 @@ export function App() {
         </Toolbar>
       </AppBar>
 
-      {/* Tunnel error message */}
-      {tunnelError && (
-        <Alert
-          severity="error"
-          sx={{
-            mt: '56px', // Match toolbar height
-            position: 'sticky',
-            top: '56px',
-            zIndex: 1000
-          }}
-          onClose={() => setTunnelError('')}
-        >
-          {tunnelError}
-        </Alert>
-      )}
-
       {/* Sidebar navigation */}
       <Drawer
         sx={{
@@ -662,11 +663,6 @@ export function App() {
           transition: 'background-color 0.2s ease'
         }}
       >
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
-            {error}
-          </Alert>
-        )}
 
         {/* Render the current page */}
         {renderPage()}
