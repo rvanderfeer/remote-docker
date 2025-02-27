@@ -23,12 +23,12 @@ COPY ui /ui
 RUN npm run build
 
 FROM alpine
-LABEL org.opencontainers.image.title="Remote docker" \
+LABEL org.opencontainers.image.title="Remote Docker" \
     org.opencontainers.image.description="Connect to remote docker" \
     org.opencontainers.image.vendor="egekocabas" \
     com.docker.desktop.extension.api.version="0.3.4" \
     com.docker.extension.screenshots="" \
-    com.docker.desktop.extension.icon="" \
+    com.docker.desktop.extension.icon="extension-icon.svg" \
     com.docker.extension.detailed-description="" \
     com.docker.extension.publisher-url="" \
     com.docker.extension.additional-urls="" \
@@ -47,6 +47,6 @@ RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 COPY --from=builder /backend/bin/service /
 COPY docker-compose.yaml .
 COPY metadata.json .
-COPY docker.svg .
+COPY extension-icon.svg .
 COPY --from=client-builder /ui/build ui
 CMD /service -socket /run/guest-services/backend.sock
