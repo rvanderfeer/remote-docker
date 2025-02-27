@@ -3,7 +3,6 @@ import { createDockerDesktopClient } from '@docker/extension-api-client';
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Paper,
   Table,
@@ -17,9 +16,9 @@ import {
   IconButton,
   Chip
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Environment, ExtensionSettings } from '../../App';
+import AutoRefreshControls from '../../components/AutoRefreshControls';
 
 // Volume interface
 interface Volume {
@@ -54,6 +53,12 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
   const [error, setError] = useState('');
   const ddClient = useDockerDesktopClient();
 
+  // Auto-refresh states
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
   // Load volumes when active environment changes
   useEffect(() => {
     if (activeEnvironment) {
@@ -64,6 +69,40 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
     }
   }, [activeEnvironment]);
 
+  // Auto-refresh interval setup
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    if (autoRefresh && activeEnvironment) {
+      intervalId = setInterval(() => {
+        loadVolumes();
+      }, refreshInterval * 1000);
+    }
+
+    // Cleanup function
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [autoRefresh, refreshInterval, activeEnvironment]);
+
+  // Reset auto-refresh when tab changes or component unmounts
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        setAutoRefresh(false);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      setAutoRefresh(false);
+    };
+  }, []);
+
   // Load volumes from the active environment
   const loadVolumes = async () => {
     if (!activeEnvironment) {
@@ -71,7 +110,14 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
       return;
     }
 
-    setIsLoading(true);
+    // For initial loading (empty volumes list)
+    if (volumes.length === 0) {
+      setIsLoading(true);
+    } else {
+      // For refreshing when we already have data
+      setIsRefreshing(true);
+    }
+
     setError('');
 
     try {
@@ -95,6 +141,7 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
       // Cast response to Volume array
       const volumeData = response as Volume[];
       setVolumes(volumeData);
+      setLastRefreshTime(new Date()); // Update last refresh time
       console.log('Volumes loaded:', volumeData);
     } catch (err: any) {
       console.error('Failed to load volumes:', err);
@@ -102,6 +149,7 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
       setVolumes([]);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -109,7 +157,7 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
   const deleteVolume = async (volumeName: string) => {
     if (!activeEnvironment) return;
 
-    setIsLoading(true);
+    setIsRefreshing(true);
     try {
       if (!ddClient.extension?.vm?.service) {
         throw new Error('Docker Desktop service not available');
@@ -131,8 +179,7 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
     } catch (err: any) {
       console.error('Failed to delete volume:', err);
       setError(`Failed to delete volume: ${err.message || 'Unknown error'}`);
-    } finally {
-      setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -155,21 +202,30 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
     return `${formattedSize.toFixed(2)} ${units[i]}`;
   };
 
+  // Auto-refresh handlers
+  const handleAutoRefreshChange = (enabled: boolean) => {
+    setAutoRefresh(enabled);
+  };
+
+  const handleIntervalChange = (interval: number) => {
+    setRefreshInterval(interval);
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5">Volumes</Typography>
 
-        <Box>
-          <Button
-            variant="contained"
-            onClick={loadVolumes}
-            disabled={isLoading || !activeEnvironment}
-            startIcon={<RefreshIcon />}
-          >
-            Refresh
-          </Button>
-        </Box>
+        <AutoRefreshControls
+          autoRefresh={autoRefresh}
+          refreshInterval={refreshInterval}
+          lastRefreshTime={lastRefreshTime}
+          isRefreshing={isRefreshing}
+          isDisabled={!activeEnvironment}
+          onRefreshClick={loadVolumes}
+          onAutoRefreshChange={handleAutoRefreshChange}
+          onIntervalChange={handleIntervalChange}
+        />
       </Box>
 
       {/* Warning when no environment is selected */}
@@ -186,78 +242,101 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
         </Alert>
       ) : null}
 
-      {/* Loading indicator */}
-      {isLoading ? (
+      {/* Loading indicator for initial load only */}
+      {isLoading && !volumes.length ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
           <CircularProgress />
         </Box>
       ) : null}
 
-      {/* Volumes table */}
+      {/* Volumes table with refresh overlay */}
       {!isLoading && activeEnvironment && volumes.length > 0 ? (
-        <TableContainer component={Paper}>
-          <Table sx={{ minWidth: 650 }}>
-            <TableHead>
-              <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>Driver</TableCell>
-                <TableCell>Mount Point</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell>Size</TableCell>
-                <TableCell>Labels</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {volumes.map((volume) => (
-                <TableRow key={volume.name} hover>
-                  <TableCell>{volume.name}</TableCell>
-                  <TableCell>{volume.driver}</TableCell>
-                  <TableCell sx={{
-                    maxWidth: 200,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}>
-                    <Tooltip title={volume.mountpoint}>
-                      <span>{volume.mountpoint}</span>
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell>{volume.created}</TableCell>
-                  <TableCell>{formatSize(volume.size)}</TableCell>
-                  <TableCell>
-                    {volume.labels && volume.labels.length > 0 ? (
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                        {volume.labels.map((label, index) => (
-                          <Chip
-                            key={index}
-                            label={label}
-                            size="small"
-                            variant="outlined"
-                          />
-                        ))}
-                      </Box>
-                    ) : (
-                      "None"
-                    )}
-                  </TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => deleteVolume(volume.name)}
-                        disabled={isLoading}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </TableCell>
+        <Box sx={{ position: 'relative' }}>
+          {/* Refresh overlay */}
+          {isRefreshing && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                zIndex: 1,
+                borderRadius: 1
+              }}
+            >
+              <CircularProgress />
+            </Box>
+          )}
+
+          <TableContainer component={Paper}>
+            <Table sx={{ minWidth: 650 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Name</TableCell>
+                  <TableCell>Driver</TableCell>
+                  <TableCell>Mount Point</TableCell>
+                  <TableCell>Created</TableCell>
+                  <TableCell>Size</TableCell>
+                  <TableCell>Labels</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+              </TableHead>
+              <TableBody>
+                {volumes.map((volume) => (
+                  <TableRow key={volume.name} hover>
+                    <TableCell>{volume.name}</TableCell>
+                    <TableCell>{volume.driver}</TableCell>
+                    <TableCell sx={{
+                      maxWidth: 200,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      <Tooltip title={volume.mountpoint}>
+                        <span>{volume.mountpoint}</span>
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell>{volume.created}</TableCell>
+                    <TableCell>{formatSize(volume.size)}</TableCell>
+                    <TableCell>
+                      {volume.labels && volume.labels.length > 0 ? (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {volume.labels.map((label, index) => (
+                            <Chip
+                              key={index}
+                              label={label}
+                              size="small"
+                              variant="outlined"
+                            />
+                          ))}
+                        </Box>
+                      ) : (
+                        "None"
+                      )}
+                    </TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Delete">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => deleteVolume(volume.name)}
+                          disabled={isRefreshing}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
       ) : !isLoading && activeEnvironment ? (
         <Alert severity="info">
           No volumes found in the selected environment.

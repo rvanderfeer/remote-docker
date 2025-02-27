@@ -3,7 +3,6 @@ import { createDockerDesktopClient } from '@docker/extension-api-client';
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Paper,
   Table,
@@ -17,9 +16,9 @@ import {
   IconButton,
   Chip
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { Environment, ExtensionSettings } from '../../App';
+import AutoRefreshControls from '../../components/AutoRefreshControls';
 
 // Image interface
 interface Image {
@@ -53,6 +52,12 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
   const [error, setError] = useState('');
   const ddClient = useDockerDesktopClient();
 
+  // Auto-refresh states
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
   // Load images when active environment changes
   useEffect(() => {
     if (activeEnvironment) {
@@ -63,6 +68,40 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
     }
   }, [activeEnvironment]);
 
+  // Auto-refresh interval setup
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    if (autoRefresh && activeEnvironment) {
+      intervalId = setInterval(() => {
+        loadImages();
+      }, refreshInterval * 1000);
+    }
+
+    // Cleanup function
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [autoRefresh, refreshInterval, activeEnvironment]);
+
+  // Reset auto-refresh when tab changes or component unmounts
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        setAutoRefresh(false);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      setAutoRefresh(false);
+    };
+  }, []);
+
   // Load images from the active environment
   const loadImages = async () => {
     if (!activeEnvironment) {
@@ -70,7 +109,14 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
       return;
     }
 
-    setIsLoading(true);
+    // For initial loading (empty images list)
+    if (images.length === 0) {
+      setIsLoading(true);
+    } else {
+      // For refreshing when we already have data
+      setIsRefreshing(true);
+    }
+
     setError('');
 
     try {
@@ -103,6 +149,7 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
       // Cast response to Image array
       const imageData = response as Image[];
       setImages(imageData);
+      setLastRefreshTime(new Date()); // Update last refresh time
       console.log('Images loaded:', imageData);
     } catch (err: any) {
       console.error('Failed to load images:', err);
@@ -110,6 +157,7 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
       setImages([]);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -130,21 +178,30 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
     return `${formattedSize.toFixed(2)} ${units[i]}`;
   };
 
+  // Auto-refresh handlers
+  const handleAutoRefreshChange = (enabled: boolean) => {
+    setAutoRefresh(enabled);
+  };
+
+  const handleIntervalChange = (interval: number) => {
+    setRefreshInterval(interval);
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5">Images</Typography>
 
-        <Box>
-          <Button
-            variant="contained"
-            onClick={loadImages}
-            disabled={isLoading || !activeEnvironment}
-            startIcon={<RefreshIcon />}
-          >
-            Refresh
-          </Button>
-        </Box>
+        <AutoRefreshControls
+          autoRefresh={autoRefresh}
+          refreshInterval={refreshInterval}
+          lastRefreshTime={lastRefreshTime}
+          isRefreshing={isRefreshing}
+          isDisabled={!activeEnvironment}
+          onRefreshClick={loadImages}
+          onAutoRefreshChange={handleAutoRefreshChange}
+          onIntervalChange={handleIntervalChange}
+        />
       </Box>
 
       {/* Warning when no environment is selected */}
@@ -161,59 +218,82 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
         </Alert>
       ) : null}
 
-      {/* Loading indicator */}
-      {isLoading ? (
+      {/* Loading indicator for initial load only */}
+      {isLoading && !images.length ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
           <CircularProgress />
         </Box>
       ) : null}
 
-      {/* Images table - this is a placeholder as the actual API doesn't exist yet */}
+      {/* Images table with refresh overlay */}
       {!isLoading && activeEnvironment && images.length > 0 ? (
-        <TableContainer component={Paper}>
-          <Table sx={{ minWidth: 650 }}>
-            <TableHead>
-              <TableRow>
-                <TableCell width="20%">Repository</TableCell>
-                <TableCell width="15%">Tag</TableCell>
-                <TableCell width="15%">Image ID</TableCell>
-                <TableCell width="20%">Created</TableCell>
-                <TableCell width="20%">Size</TableCell>
-                <TableCell width="10%" align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {images.map((image) => (
-                <TableRow key={image.id} hover>
-                  <TableCell>{image.repository}</TableCell>
-                  <TableCell>
-                    <Chip
-                      label={image.tag || 'latest'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace' }}>
-                    {image.id.substring(0, 12)}
-                  </TableCell>
-                  <TableCell>{image.created}</TableCell>
-                  <TableCell>{formatSize(image.size)}</TableCell>
-                  <TableCell align="right">
-                    <Tooltip title="Remove">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        disabled={isLoading}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </TableCell>
+        <Box sx={{ position: 'relative' }}>
+          {/* Refresh overlay */}
+          {isRefreshing && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                zIndex: 1,
+                borderRadius: 1
+              }}
+            >
+              <CircularProgress />
+            </Box>
+          )}
+
+          <TableContainer component={Paper}>
+            <Table sx={{ minWidth: 650 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell width="20%">Repository</TableCell>
+                  <TableCell width="15%">Tag</TableCell>
+                  <TableCell width="15%">Image ID</TableCell>
+                  <TableCell width="20%">Created</TableCell>
+                  <TableCell width="20%">Size</TableCell>
+                  <TableCell width="10%" align="right">Actions</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+              </TableHead>
+              <TableBody>
+                {images.map((image) => (
+                  <TableRow key={image.id} hover>
+                    <TableCell>{image.repository}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={image.tag || 'latest'}
+                        size="small"
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace' }}>
+                      {image.id.substring(0, 12)}
+                    </TableCell>
+                    <TableCell>{image.created}</TableCell>
+                    <TableCell>{formatSize(image.size)}</TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Remove">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          disabled={isRefreshing}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
       ) : !isLoading && activeEnvironment && !error ? (
         <Alert severity="info">
           No images found in the selected environment.

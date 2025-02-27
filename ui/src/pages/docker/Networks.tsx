@@ -3,7 +3,6 @@ import { createDockerDesktopClient } from '@docker/extension-api-client';
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Paper,
   Table,
@@ -17,10 +16,10 @@ import {
   IconButton,
   Chip
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteIcon from '@mui/icons-material/Delete';
 import InfoIcon from '@mui/icons-material/Info';
 import { Environment, ExtensionSettings } from '../../App';
+import AutoRefreshControls from '../../components/AutoRefreshControls';
 
 // Network interface
 interface Network {
@@ -57,6 +56,12 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
   const [error, setError] = useState('');
   const ddClient = useDockerDesktopClient();
 
+  // Auto-refresh states
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
   // Load networks when active environment changes
   useEffect(() => {
     if (activeEnvironment) {
@@ -67,6 +72,40 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
     }
   }, [activeEnvironment]);
 
+  // Auto-refresh interval setup
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    if (autoRefresh && activeEnvironment) {
+      intervalId = setInterval(() => {
+        loadNetworks();
+      }, refreshInterval * 1000);
+    }
+
+    // Cleanup function
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [autoRefresh, refreshInterval, activeEnvironment]);
+
+  // Reset auto-refresh when tab changes or component unmounts
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        setAutoRefresh(false);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      setAutoRefresh(false);
+    };
+  }, []);
+
   // Load networks from the active environment
   const loadNetworks = async () => {
     if (!activeEnvironment) {
@@ -74,7 +113,14 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
       return;
     }
 
-    setIsLoading(true);
+    // For initial loading (empty networks list)
+    if (networks.length === 0) {
+      setIsLoading(true);
+    } else {
+      // For refreshing when we already have data
+      setIsRefreshing(true);
+    }
+
     setError('');
 
     try {
@@ -98,6 +144,7 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
       // Cast response to Network array
       const networkData = response as Network[];
       setNetworks(networkData);
+      setLastRefreshTime(new Date()); // Update last refresh time
       console.log('Networks loaded:', networkData);
     } catch (err: any) {
       console.error('Failed to load networks:', err);
@@ -105,6 +152,7 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
       setNetworks([]);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -112,7 +160,7 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
   const deleteNetwork = async (networkId: string) => {
     if (!activeEnvironment) return;
 
-    setIsLoading(true);
+    setIsRefreshing(true);
     try {
       if (!ddClient.extension?.vm?.service) {
         throw new Error('Docker Desktop service not available');
@@ -134,9 +182,17 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
     } catch (err: any) {
       console.error('Failed to delete network:', err);
       setError(`Failed to delete network: ${err.message || 'Unknown error'}`);
-    } finally {
-      setIsLoading(false);
+      setIsRefreshing(false);
     }
+  };
+
+  // Auto-refresh handlers
+  const handleAutoRefreshChange = (enabled: boolean) => {
+    setAutoRefresh(enabled);
+  };
+
+  const handleIntervalChange = (interval: number) => {
+    setRefreshInterval(interval);
   };
 
   return (
@@ -144,16 +200,16 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5">Networks</Typography>
 
-        <Box>
-          <Button
-            variant="contained"
-            onClick={loadNetworks}
-            disabled={isLoading || !activeEnvironment}
-            startIcon={<RefreshIcon />}
-          >
-            Refresh
-          </Button>
-        </Box>
+        <AutoRefreshControls
+          autoRefresh={autoRefresh}
+          refreshInterval={refreshInterval}
+          lastRefreshTime={lastRefreshTime}
+          isRefreshing={isRefreshing}
+          isDisabled={!activeEnvironment}
+          onRefreshClick={loadNetworks}
+          onAutoRefreshChange={handleAutoRefreshChange}
+          onIntervalChange={handleIntervalChange}
+        />
       </Box>
 
       {/* Warning when no environment is selected */}
@@ -170,77 +226,100 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
         </Alert>
       ) : null}
 
-      {/* Loading indicator */}
-      {isLoading ? (
+      {/* Loading indicator for initial load only */}
+      {isLoading && !networks.length ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
           <CircularProgress />
         </Box>
       ) : null}
 
-      {/* Networks table */}
+      {/* Networks table with refresh overlay */}
       {!isLoading && activeEnvironment && networks.length > 0 ? (
-        <TableContainer component={Paper}>
-          <Table sx={{ minWidth: 650 }}>
-            <TableHead>
-              <TableRow>
-                <TableCell>Name</TableCell>
-                <TableCell>ID</TableCell>
-                <TableCell>Driver</TableCell>
-                <TableCell>Scope</TableCell>
-                <TableCell>Subnet</TableCell>
-                <TableCell>Gateway</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {networks.map((network) => (
-                <TableRow key={network.id} hover>
-                  <TableCell>{network.name}</TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace' }}>
-                    {network.id.substring(0, 12)}
-                  </TableCell>
-                  <TableCell>{network.driver}</TableCell>
-                  <TableCell>{network.scope}</TableCell>
-                  <TableCell>{network.subnet || 'N/A'}</TableCell>
-                  <TableCell>{network.gateway || 'N/A'}</TableCell>
-                  <TableCell>
-                    <Chip
-                      label={network.internal ? 'Internal' : 'External'}
-                      color={network.internal ? 'default' : 'primary'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <Tooltip title="Inspect">
-                        <IconButton
-                          size="small"
-                          color="primary"
-                          disabled={isLoading}
-                          sx={{ mr: 1 }}
-                        >
-                          <InfoIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Delete">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => deleteNetwork(network.id)}
-                          disabled={isLoading}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </Box>
-                  </TableCell>
+        <Box sx={{ position: 'relative' }}>
+          {/* Refresh overlay */}
+          {isRefreshing && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                zIndex: 1,
+                borderRadius: 1
+              }}
+            >
+              <CircularProgress />
+            </Box>
+          )}
+
+          <TableContainer component={Paper}>
+            <Table sx={{ minWidth: 650 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Name</TableCell>
+                  <TableCell>ID</TableCell>
+                  <TableCell>Driver</TableCell>
+                  <TableCell>Scope</TableCell>
+                  <TableCell>Subnet</TableCell>
+                  <TableCell>Gateway</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+              </TableHead>
+              <TableBody>
+                {networks.map((network) => (
+                  <TableRow key={network.id} hover>
+                    <TableCell>{network.name}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace' }}>
+                      {network.id.substring(0, 12)}
+                    </TableCell>
+                    <TableCell>{network.driver}</TableCell>
+                    <TableCell>{network.scope}</TableCell>
+                    <TableCell>{network.subnet || 'N/A'}</TableCell>
+                    <TableCell>{network.gateway || 'N/A'}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={network.internal ? 'Internal' : 'External'}
+                        color={network.internal ? 'default' : 'primary'}
+                        size="small"
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <Tooltip title="Inspect">
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            disabled={isRefreshing}
+                            sx={{ mr: 1 }}
+                          >
+                            <InfoIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => deleteNetwork(network.id)}
+                            disabled={isRefreshing}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
       ) : !isLoading && activeEnvironment ? (
         <Alert severity="info">
           No networks found in the selected environment.

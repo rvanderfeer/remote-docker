@@ -3,7 +3,6 @@ import { createDockerDesktopClient } from '@docker/extension-api-client';
 import {
   Alert,
   Box,
-  Button,
   CircularProgress,
   Paper,
   Table,
@@ -19,8 +18,8 @@ import {
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import { Environment, ExtensionSettings } from '../../App';
+import AutoRefreshControls from '../../components/AutoRefreshControls';
 
 // Container interface
 interface Container {
@@ -53,6 +52,12 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
   const [error, setError] = useState('');
   const ddClient = useDockerDesktopClient();
 
+  // Auto-refresh states
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
   // Load containers when active environment changes
   useEffect(() => {
     if (activeEnvironment) {
@@ -63,6 +68,40 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
     }
   }, [activeEnvironment]);
 
+  // Auto-refresh interval setup
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    if (autoRefresh && activeEnvironment) {
+      intervalId = setInterval(() => {
+        loadContainers();
+      }, refreshInterval * 1000);
+    }
+
+    // Cleanup function
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [autoRefresh, refreshInterval, activeEnvironment]);
+
+  // Reset auto-refresh when tab changes or component unmounts
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        setAutoRefresh(false);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      setAutoRefresh(false);
+    };
+  }, []);
+
   // Load containers from the active environment
   const loadContainers = async () => {
     if (!activeEnvironment) {
@@ -70,7 +109,14 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
       return;
     }
 
-    setIsLoading(true);
+    // For initial loading (empty containers list)
+    if (containers.length === 0) {
+      setIsLoading(true);
+    } else {
+      // For refreshing when we already have data
+      setIsRefreshing(true);
+    }
+
     setError('');
 
     try {
@@ -94,6 +140,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
       // Cast response to Container array
       const containerData = response as Container[];
       setContainers(containerData);
+      setLastRefreshTime(new Date()); // Update last refresh time
       console.log('Containers loaded:', containerData);
     } catch (err: any) {
       console.error('Failed to load containers:', err);
@@ -101,6 +148,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
       setContainers([]);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -108,7 +156,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
   const startContainer = async (containerId: string) => {
     if (!activeEnvironment) return;
 
-    setIsLoading(true);
+    setIsRefreshing(true);
     try {
       if (!ddClient.extension?.vm?.service) {
         throw new Error('Docker Desktop service not available');
@@ -130,8 +178,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
     } catch (err: any) {
       console.error('Failed to start container:', err);
       setError(`Failed to start container: ${err.message || 'Unknown error'}`);
-    } finally {
-      setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -139,7 +186,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
   const stopContainer = async (containerId: string) => {
     if (!activeEnvironment) return;
 
-    setIsLoading(true);
+    setIsRefreshing(true);
     try {
       if (!ddClient.extension?.vm?.service) {
         throw new Error('Docker Desktop service not available');
@@ -161,8 +208,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
     } catch (err: any) {
       console.error('Failed to stop container:', err);
       setError(`Failed to stop container: ${err.message || 'Unknown error'}`);
-    } finally {
-      setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -171,21 +217,30 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
     return status.toLowerCase().includes('up');
   };
 
+  // Auto-refresh handlers
+  const handleAutoRefreshChange = (enabled: boolean) => {
+    setAutoRefresh(enabled);
+  };
+
+  const handleIntervalChange = (interval: number) => {
+    setRefreshInterval(interval);
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5">Containers</Typography>
 
-        <Box>
-          <Button
-            variant="contained"
-            onClick={loadContainers}
-            disabled={isLoading || !activeEnvironment}
-            startIcon={<RefreshIcon />}
-          >
-            Refresh
-          </Button>
-        </Box>
+        <AutoRefreshControls
+          autoRefresh={autoRefresh}
+          refreshInterval={refreshInterval}
+          lastRefreshTime={lastRefreshTime}
+          isRefreshing={isRefreshing}
+          isDisabled={!activeEnvironment}
+          onRefreshClick={loadContainers}
+          onAutoRefreshChange={handleAutoRefreshChange}
+          onIntervalChange={handleIntervalChange}
+        />
       </Box>
 
       {/* Warning when no environment is selected */}
@@ -202,72 +257,95 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
         </Alert>
       ) : null}
 
-      {/* Loading indicator */}
-      {isLoading ? (
+      {/* Loading indicator for initial load only */}
+      {isLoading && !containers.length ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
           <CircularProgress />
         </Box>
       ) : null}
 
-      {/* Containers table */}
+      {/* Containers table with refresh overlay */}
       {!isLoading && activeEnvironment && containers.length > 0 ? (
-        <TableContainer component={Paper}>
-          <Table sx={{ minWidth: 650 }}>
-            <TableHead>
-              <TableRow>
-                <TableCell width="15%">Container ID</TableCell>
-                <TableCell width="25%">Name</TableCell>
-                <TableCell width="30%">Image</TableCell>
-                <TableCell width="20%">Status</TableCell>
-                <TableCell width="10%" align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {containers.map((container) => (
-                <TableRow key={container.id} hover>
-                  <TableCell sx={{ fontFamily: 'monospace' }}>
-                    {container.id.substring(0, 12)}
-                  </TableCell>
-                  <TableCell>{container.name}</TableCell>
-                  <TableCell>{container.image}</TableCell>
-                  <TableCell>
-                    <Chip
-                      label={container.status}
-                      color={isRunning(container.status) ? 'success' : 'default'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    {isRunning(container.status) ? (
-                      <Tooltip title="Stop">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => stopContainer(container.id)}
-                          disabled={isLoading}
-                        >
-                          <StopIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    ) : (
-                      <Tooltip title="Start">
-                        <IconButton
-                          size="small"
-                          color="success"
-                          onClick={() => startContainer(container.id)}
-                          disabled={isLoading}
-                        >
-                          <PlayArrowIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </TableCell>
+        <Box sx={{ position: 'relative' }}>
+          {/* Refresh overlay */}
+          {isRefreshing && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                zIndex: 1,
+                borderRadius: 1
+              }}
+            >
+              <CircularProgress />
+            </Box>
+          )}
+
+          <TableContainer component={Paper}>
+            <Table sx={{ minWidth: 650 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell width="15%">Container ID</TableCell>
+                  <TableCell width="25%">Name</TableCell>
+                  <TableCell width="30%">Image</TableCell>
+                  <TableCell width="20%">Status</TableCell>
+                  <TableCell width="10%" align="right">Actions</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+              </TableHead>
+              <TableBody>
+                {containers.map((container) => (
+                  <TableRow key={container.id} hover>
+                    <TableCell sx={{ fontFamily: 'monospace' }}>
+                      {container.id.substring(0, 12)}
+                    </TableCell>
+                    <TableCell>{container.name}</TableCell>
+                    <TableCell>{container.image}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={container.status}
+                        color={isRunning(container.status) ? 'success' : 'default'}
+                        size="small"
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      {isRunning(container.status) ? (
+                        <Tooltip title="Stop">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => stopContainer(container.id)}
+                            disabled={isRefreshing}
+                          >
+                            <StopIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip title="Start">
+                          <IconButton
+                            size="small"
+                            color="success"
+                            onClick={() => startContainer(container.id)}
+                            disabled={isRefreshing}
+                          >
+                            <PlayArrowIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
       ) : !isLoading && activeEnvironment ? (
         <Alert severity="info">
           No containers found in the selected environment.
