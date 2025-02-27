@@ -22,7 +22,7 @@ import {
   Tooltip,
   Typography
 } from '@mui/material';
-import { Environment, ExtensionSettings } from '../App';
+import { Environment, ExtensionSettings } from '../../App';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
