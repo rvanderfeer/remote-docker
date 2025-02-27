@@ -47,11 +47,25 @@ type SSHConnectionRequest struct {
 }
 
 type DockerContainer struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	Status string `json:"status"`
-	Ports  string `json:"ports"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Image          string `json:"image"`
+	Status         string `json:"status"`
+	Ports          string `json:"ports"`
+	Labels         string `json:"labels"`         // New field to store raw label string
+	ComposeProject string `json:"composeProject"` // Computed field if the container is part of a Compose project
+}
+
+// A group of containers under the same Compose project
+type ComposeGroup struct {
+	Name       string            `json:"name"`
+	Containers []DockerContainer `json:"containers"`
+}
+
+// Final response structure
+type DockerContainerResponse struct {
+	ComposeGroups []ComposeGroup    `json:"composeGroups"`
+	Ungrouped     []DockerContainer `json:"ungrouped"`
 }
 
 // Settings data file path
@@ -1065,9 +1079,8 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// Format the docker command to include port information
-	// The --format option with '{{.Ports}}' will get the port bindings
-	dockerCommand := "docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'"
+	// We now capture labels in the output, so we have a total of 6 fields
+	dockerCommand := `docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.Labels}}'`
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1079,9 +1092,11 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		})
 	}
 
-	// Parse the output into container objects
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	containers := make([]DockerContainer, 0, len(lines))
+
+	// We'll track grouped containers by Compose project, plus an ungrouped slice
+	groupsMap := make(map[string][]DockerContainer)
+	ungrouped := []DockerContainer{}
 
 	for _, line := range lines {
 		if line == "" {
@@ -1089,7 +1104,8 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		}
 
 		parts := strings.Split(line, "|")
-		if len(parts) != 5 {
+		// We expect exactly 6 parts now: ID, Names, Image, Status, Ports, Labels
+		if len(parts) != 6 {
 			logger.Errorf("Invalid format for container info: %s", line)
 			continue
 		}
@@ -1100,11 +1116,54 @@ func connectToRemoteDocker(ctx echo.Context) error {
 			Image:  parts[2],
 			Status: parts[3],
 			Ports:  parts[4],
+			Labels: parts[5],
 		}
-		containers = append(containers, container)
+
+		// Check if there is a 'com.docker.compose.project=' label
+		composeProject := parseComposeProjectLabel(container.Labels)
+		container.ComposeProject = composeProject
+
+		// Group by Compose project if present
+		if composeProject != "" {
+			groupsMap[composeProject] = append(groupsMap[composeProject], container)
+		} else {
+			ungrouped = append(ungrouped, container)
+		}
 	}
 
-	return ctx.JSON(http.StatusOK, containers)
+	// Build a slice of ComposeGroup
+	var composeGroups []ComposeGroup
+	for project, containers := range groupsMap {
+		composeGroups = append(composeGroups, ComposeGroup{
+			Name:       project,
+			Containers: containers,
+		})
+	}
+
+	// Create the final response
+	response := DockerContainerResponse{
+		ComposeGroups: composeGroups,
+		Ungrouped:     ungrouped,
+	}
+
+	return ctx.JSON(http.StatusOK, response)
+}
+
+// parseComposeProjectLabel checks if the label string contains "com.docker.compose.project=XYZ"
+// and returns the project name if found, or empty string if not found.
+func parseComposeProjectLabel(labels string) string {
+	// Example labels string might look like:
+	//   "com.docker.compose.project=helios,com.docker.compose.version=2.15.1"
+	// or it might be empty or have other labels
+	pairs := strings.Split(labels, ",")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if strings.HasPrefix(pair, "com.docker.compose.project=") {
+			// Extract everything after =
+			return strings.TrimPrefix(pair, "com.docker.compose.project=")
+		}
+	}
+	return ""
 }
 
 func listen(path string) (net.Listener, error) {

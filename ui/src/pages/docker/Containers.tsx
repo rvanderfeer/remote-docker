@@ -28,13 +28,28 @@ import ContainerLogs from './ContainerLogs';
 import ConfirmationDialog from '../../components/ConfirmationDialog';
 
 // Extended Container interface with ports
-interface Container {
+export interface DockerContainer {
   id: string;
   name: string;
   image: string;
   status: string;
-  ports?: string;  // Raw ports string from Docker
+  ports: string;
+  labels?: string; // raw label string from Docker, optional
+  composeProject?: string; // if container belongs to a compose project
 }
+
+// A group of containers from the same Compose project
+export interface ComposeGroup {
+  name: string;
+  containers: DockerContainer[];
+}
+
+// The full response from the backend
+export interface ContainersResponse {
+  composeGroups: ComposeGroup[];
+  ungrouped: DockerContainer[];
+}
+
 
 // Parsed port binding type
 interface PortBinding {
@@ -68,7 +83,8 @@ const Containers: React.FC<ContainersProps> = ({
                                                  isLogsOpen,
                                                  setIsLogsOpen
                                                }) => {
-  const [containers, setContainers] = useState<Container[]>([]);
+  const [composeGroups, setComposeGroups] = useState<ComposeGroup[]>([]);
+  const [ungroupedContainers, setUngroupedContainers] = useState<DockerContainer[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const ddClient = useDockerDesktopClient();
@@ -80,13 +96,13 @@ const Containers: React.FC<ContainersProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
 
   // Container logs states
-  const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
+  const [selectedContainer, setSelectedContainer] = useState<DockerContainer | null>(null);
 
   // Confirmation dialog states
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
     type: 'start' | 'stop';
-    container: Container | null;
+    container: DockerContainer | null;
   }>({ type: 'start', container: null });
 
   // Load containers when active environment changes
@@ -95,7 +111,8 @@ const Containers: React.FC<ContainersProps> = ({
       loadContainers();
     } else {
       // Clear containers if no environment is selected
-      setContainers([]);
+      setComposeGroups([]);
+      setUngroupedContainers([]);
     }
   }, [activeEnvironment]);
 
@@ -189,10 +206,9 @@ const Containers: React.FC<ContainersProps> = ({
     }
 
     // For initial loading (empty containers list)
-    if (containers.length === 0) {
+    if (composeGroups.length === 0 && ungroupedContainers.length === 0) {
       setIsLoading(true);
     } else {
-      // For refreshing when we already have data
       setIsRefreshing(true);
     }
 
@@ -217,18 +233,19 @@ const Containers: React.FC<ContainersProps> = ({
       }
 
       // Cast response to Container array
-      const containerData = response as Container[];
+      const data = response as ContainersResponse;
 
-      // If ports field is missing, we need to fetch it separately
-      // This can be adjusted based on your backend implementation
+      // Update states
+      setComposeGroups(data.composeGroups);
+      setUngroupedContainers(data.ungrouped);
 
-      setContainers(containerData);
       setLastRefreshTime(new Date()); // Update last refresh time
-      console.log('Containers loaded:', containerData);
+      console.log('Containers loaded:', data);
     } catch (err: any) {
       console.error('Failed to load containers:', err);
       setError(`Failed to load containers: ${err.message || 'Unknown error'}`);
-      setContainers([]);
+      setComposeGroups([]);
+      setUngroupedContainers([]);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -310,7 +327,7 @@ const Containers: React.FC<ContainersProps> = ({
   };
 
   // View container logs
-  const viewContainerLogs = (container: Container) => {
+  const viewContainerLogs = (container: DockerContainer) => {
     setSelectedContainer(container);
     setIsLogsOpen(true); // Update parent component state
   };
@@ -335,7 +352,7 @@ const Containers: React.FC<ContainersProps> = ({
   };
 
   // Open confirmation dialog for starting a container
-  const confirmStartContainer = (container: Container) => {
+  const confirmStartContainer = (container: DockerContainer) => {
     setConfirmAction({
       type: 'start',
       container: container
@@ -344,7 +361,7 @@ const Containers: React.FC<ContainersProps> = ({
   };
 
   // Open confirmation dialog for stopping a container
-  const confirmStopContainer = (container: Container) => {
+  const confirmStopContainer = (container: DockerContainer) => {
     setConfirmAction({
       type: 'stop',
       container: container
@@ -353,7 +370,7 @@ const Containers: React.FC<ContainersProps> = ({
   };
 
   // Render port bindings for a container
-  const renderPortBindings = (container: Container) => {
+  const renderPortBindings = (container: DockerContainer) => {
     const portBindings = parsePortBindings(container.ports);
 
     if (portBindings.length === 0) {
@@ -381,8 +398,92 @@ const Containers: React.FC<ContainersProps> = ({
     );
   };
 
+  // Table for a list of containers (reused for both grouped and ungrouped)
+  const renderContainersTable = (containersList: DockerContainer[]) => {
+    return (
+      <TableContainer component={Paper} sx={{ mb: 3 }}>
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableCell width="10%">Container ID</TableCell>
+              <TableCell width="15%">Name</TableCell>
+              <TableCell width="20%">Image</TableCell>
+              <TableCell width="15%">Status</TableCell>
+              <TableCell width="30%">Ports</TableCell>
+              <TableCell width="10%" align="right">Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {containersList.map((container) => (
+              <TableRow key={container.id} hover>
+                <TableCell sx={{ fontFamily: 'monospace' }}>
+                  {container.id.substring(0, 12)}
+                </TableCell>
+                <TableCell>{container.name}</TableCell>
+                <TableCell>{container.image}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={container.status}
+                    color={isRunning(container.status) ? 'success' : 'default'}
+                    size="small"
+                    variant="outlined"
+                  />
+                </TableCell>
+                <TableCell>
+                  {renderPortBindings(container)}
+                </TableCell>
+                <TableCell align="right">
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    {/* View logs button */}
+                    <Tooltip title="View Logs">
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        onClick={() => viewContainerLogs(container)}
+                        disabled={isRefreshing || isLogsOpen}
+                        sx={{ mr: 1 }}
+                      >
+                        <VisibilityIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+
+                    {/* Start/Stop button */}
+                    {isRunning(container.status) ? (
+                      <Tooltip title="Stop">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => confirmStopContainer(container)}
+                          disabled={isRefreshing || isLogsOpen}
+                        >
+                          <StopIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title="Start">
+                        <IconButton
+                          size="small"
+                          color="success"
+                          onClick={() => confirmStartContainer(container)}
+                          disabled={isRefreshing || isLogsOpen}
+                        >
+                          <PlayArrowIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    );
+  };
+
   return (
     <Box>
+      {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5">Containers</Typography>
 
@@ -413,16 +514,15 @@ const Containers: React.FC<ContainersProps> = ({
       ) : null}
 
       {/* Loading indicator for initial load only */}
-      {isLoading && !containers.length ? (
+      {isLoading && composeGroups.length === 0 && ungroupedContainers.length === 0 ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
           <CircularProgress />
         </Box>
       ) : null}
 
-      {/* Containers table with refresh overlay */}
-      {!isLoading && activeEnvironment && containers.length > 0 ? (
+      {/* Refresh overlay while we have data */}
+      {(composeGroups.length > 0 || ungroupedContainers.length > 0) && (
         <Box sx={{ position: 'relative' }}>
-          {/* Refresh overlay */}
           {isRefreshing && (
             <Box
               sx={{
@@ -443,89 +543,32 @@ const Containers: React.FC<ContainersProps> = ({
             </Box>
           )}
 
-          <TableContainer component={Paper}>
-            <Table sx={{ minWidth: 650 }}>
-              <TableHead>
-                <TableRow>
-                  <TableCell width="10%">Container ID</TableCell>
-                  <TableCell width="15%">Name</TableCell>
-                  <TableCell width="20%">Image</TableCell>
-                  <TableCell width="15%">Status</TableCell>
-                  <TableCell width="30%">Ports</TableCell>
-                  <TableCell width="10%" align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {containers.map((container) => (
-                  <TableRow key={container.id} hover>
-                    <TableCell sx={{ fontFamily: 'monospace' }}>
-                      {container.id.substring(0, 12)}
-                    </TableCell>
-                    <TableCell>{container.name}</TableCell>
-                    <TableCell>{container.image}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={container.status}
-                        color={isRunning(container.status) ? 'success' : 'default'}
-                        size="small"
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      {renderPortBindings(container)}
-                    </TableCell>
-                    <TableCell align="right">
-                      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                        {/* View logs button */}
-                        <Tooltip title="View Logs">
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            onClick={() => viewContainerLogs(container)}
-                            disabled={isRefreshing || isLogsOpen}
-                            sx={{ mr: 1 }}
-                          >
-                            <VisibilityIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+          {/* RENDER COMPOSE GROUPS */}
+          {composeGroups.map(group => (
+            <Box key={group.name} sx={{ mb: 4 }}>
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                Compose Project: {group.name}
+              </Typography>
+              {renderContainersTable(group.containers)}
+            </Box>
+          ))}
 
-                        {/* Start/Stop button */}
-                        {isRunning(container.status) ? (
-                          <Tooltip title="Stop">
-                            <IconButton
-                              size="small"
-                              color="error"
-                              onClick={() => confirmStopContainer(container)}
-                              disabled={isRefreshing || isLogsOpen}
-                            >
-                              <StopIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        ) : (
-                          <Tooltip title="Start">
-                            <IconButton
-                              size="small"
-                              color="success"
-                              onClick={() => confirmStartContainer(container)}
-                              disabled={isRefreshing || isLogsOpen}
-                            >
-                              <PlayArrowIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+          {/* RENDER UNGROUPED CONTAINERS */}
+          {ungroupedContainers.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                Ungrouped Containers
+              </Typography>
+              {renderContainersTable(ungroupedContainers)}
+            </Box>
+          )}
+
+          {/* If no containers at all */}
+          {composeGroups.length === 0 && ungroupedContainers.length === 0 && !isLoading && (
+            <Alert severity="info">No containers found in the selected environment.</Alert>
+          )}
         </Box>
-      ) : !isLoading && activeEnvironment ? (
-        <Alert severity="info">
-          No containers found in the selected environment.
-        </Alert>
-      ) : null}
+      )}
 
       {/* Logs drawer */}
       <Drawer
