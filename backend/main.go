@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -27,6 +30,9 @@ type DockerContainer struct {
 	Image  string `json:"image"`
 	Status string `json:"status"`
 }
+
+// Settings data file path
+const settingsFilePath = "/root/.docker-extension/settings.json"
 
 func main() {
 	var socketPath string
@@ -61,8 +67,77 @@ func main() {
 
 	router.GET("/hello", hello)
 	router.POST("/connect", connectToRemoteDocker)
+	// Get settings
+	router.GET("/settings", getSettings)
+	// Save settings
+	router.POST("/settings", saveSettings)
 
 	logger.Fatal(router.Start(startURL))
+}
+
+// Get settings from file
+func getSettings(ctx echo.Context) error {
+	// Ensure directory exists
+	os.MkdirAll(filepath.Dir(settingsFilePath), 0755)
+
+	// Check if settings file exists
+	if _, err := os.Stat(settingsFilePath); os.IsNotExist(err) {
+		// Return default settings if no settings exist yet
+		defaultSettings := map[string]interface{}{
+			"environments": []interface{}{},
+			"autoConnect":  false,
+		}
+		jsonData, _ := json.Marshal(defaultSettings)
+		return ctx.String(http.StatusOK, string(jsonData))
+	}
+
+	// Read settings file
+	data, err := ioutil.ReadFile(settingsFilePath)
+	if err != nil {
+		logger.Errorf("Error reading settings: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to read settings",
+		})
+	}
+
+	// Return settings data
+	return ctx.String(http.StatusOK, string(data))
+}
+
+// Save settings to file
+func saveSettings(ctx echo.Context) error {
+	// Read request body
+	body, err := ioutil.ReadAll(ctx.Request().Body)
+	if err != nil {
+		logger.Errorf("Error reading request body: %v", err)
+		return ctx.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Failed to read request body",
+		})
+	}
+
+	// Validate JSON
+	var jsonData interface{}
+	if err := json.Unmarshal(body, &jsonData); err != nil {
+		logger.Errorf("Invalid JSON: %v", err)
+		return ctx.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid JSON format",
+		})
+	}
+
+	// Ensure directory exists
+	os.MkdirAll(filepath.Dir(settingsFilePath), 0755)
+
+	// Write settings to file
+	if err := ioutil.WriteFile(settingsFilePath, body, 0644); err != nil {
+		logger.Errorf("Error writing settings: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to save settings",
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"success": "true",
+	})
 }
 
 func connectToRemoteDocker(ctx echo.Context) error {
