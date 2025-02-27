@@ -31,8 +31,9 @@ interface ContainerLogsResponse {
 
 interface ContainerLogsProps {
   activeEnvironment?: Environment;
-  containerId: string;
-  containerName: string;
+  logsType: 'container' | 'compose';
+  resourceId: string;    // containerId OR composeProject
+  resourceName: string;  // containerName OR projectName
   onClose: () => void;
 }
 
@@ -86,8 +87,9 @@ function colorizeLog(line: string): string {
 
 const ContainerLogs: React.FC<ContainerLogsProps> = ({
                                                        activeEnvironment,
-                                                       containerId,
-                                                       containerName,
+                                                       logsType,
+                                                       resourceId,
+                                                       resourceName,
                                                        onClose,
                                                      }) => {
   const ddClient = useDockerDesktopClient();
@@ -147,7 +149,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     setError('');
     setIsLoading(true);
 
-    if (!activeEnvironment || !containerId) {
+    if (!activeEnvironment || !resourceId) {
       setError('No environment or container selected');
       setIsLoading(false);
       return;
@@ -178,7 +180,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         pollTimer.current = null;
       }
     };
-  }, [activeEnvironment, containerId, timestamps]);
+  }, [activeEnvironment, resourceId, timestamps]);
 
   const handleReload = () => {
     fetchLogs(true);
@@ -200,13 +202,28 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         throw new Error('Docker Desktop service not available');
       }
 
-      const response = (await ddClient.extension.vm.service.post('/container/logs', {
+      // Decide which endpoint to call
+      let endpoint = '';
+      let payload: any = {
         hostname: activeEnvironment.hostname,
-        username: activeEnvironment.username,
-        containerId: containerId,
-        tail: tailLines,
-        timestamps: timestamps,
-      })) as ContainerLogsResponse;
+        username: activeEnvironment.username
+      };
+
+      if (logsType === 'container') {
+        endpoint = '/container/logs';
+        payload.containerId = resourceId;
+        payload.tail = tailLines;
+        // For containers, maybe we also have "timestamps: true/false"
+        payload.timestamps = true;
+      } else {
+        // Compose logs
+        endpoint = '/compose/logs';
+        payload.composeProject = resourceId;
+        // If you want to allow tail lines for compose, do so:
+        payload.tail = tailLines;
+      }
+
+      const response = (await ddClient.extension.vm.service.post(endpoint, payload)) as ContainerLogsResponse;
 
       if (response && typeof response === 'object' && 'error' in response) {
         // If the response shape includes an error field
@@ -299,7 +316,7 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         }}
       >
         <Typography sx={{ fontSize: '1rem' }}>
-          {containerName} ({containerId.substring(0, 12)})
+          {resourceName} ({resourceId.substring(0, 12)})
         </Typography>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

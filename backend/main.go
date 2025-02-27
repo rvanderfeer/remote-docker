@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,7 @@ type DockerContainer struct {
 // A group of containers under the same Compose project
 type ComposeGroup struct {
 	Name       string            `json:"name"`
+	Status     string            `json:"status"` // e.g. "Running(3)", "Partial(2/3)", etc.
 	Containers []DockerContainer `json:"containers"`
 }
 
@@ -140,6 +142,7 @@ func main() {
 	router.POST("/networks/remove", removeNetwork)
 
 	router.POST("/container/logs", getContainerLogs)
+	router.POST("/compose/logs", getComposeLogs)
 
 	// Graceful shutdown handling
 	c := make(chan os.Signal, 1)
@@ -188,6 +191,58 @@ func getContainerLogs(ctx echo.Context) error {
 
 	// Add container ID
 	dockerCmd.WriteString(fmt.Sprintf(" %s", req.ContainerId))
+
+	logger.Infof("Executing log command: %s", dockerCmd.String())
+
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCmd.String())
+	if err != nil {
+		logger.Errorf("Error reading logs: %v, output: %s", err, string(output))
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error":  fmt.Sprintf("Failed to read logs: %v", err),
+			"output": string(output),
+		})
+	}
+
+	// Split into lines for returning a JSON array
+	lines := strings.Split(string(output), "\n")
+	// If the last line is empty, trim it
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	return ctx.JSON(http.StatusOK, ContainerLogsResponse{Success: "true", Logs: lines})
+}
+
+type ComposeLogsRequest struct {
+	Hostname       string `json:"hostname"`
+	Username       string `json:"username"`
+	ComposeProject string `json:"composeProject"`
+	Tail           int    `json:"tail"`       // Number of lines to show from the end
+	Timestamps     bool   `json:"timestamps"` // Show timestamps
+}
+
+func getComposeLogs(ctx echo.Context) error {
+	var req ComposeLogsRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
+	}
+
+	if req.Hostname == "" || req.Username == "" || req.ComposeProject == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	}
+
+	// Build docker logs command with appropriate options
+	dockerCmd := strings.Builder{}
+	dockerCmd.WriteString(fmt.Sprintf("docker compose -p %s logs", req.ComposeProject))
+
+	// Add options
+	if req.Tail > 0 {
+		dockerCmd.WriteString(fmt.Sprintf(" --tail %d", req.Tail))
+	}
+	if req.Timestamps {
+		dockerCmd.WriteString(" --timestamps")
+	}
 
 	logger.Infof("Executing log command: %s", dockerCmd.String())
 
@@ -1069,6 +1124,7 @@ func saveSettings(ctx echo.Context) error {
 	})
 }
 
+// connectToRemoteDocker: called from the frontend to list containers
 func connectToRemoteDocker(ctx echo.Context) error {
 	var req SSHConnectionRequest
 	if err := ctx.Bind(&req); err != nil {
@@ -1079,10 +1135,9 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// We now capture labels in the output, so we have a total of 6 fields
+	// Include Labels in docker ps
 	dockerCommand := `docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.Labels}}'`
 
-	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error executing SSH command: %v, output: %s", err, string(output))
@@ -1093,8 +1148,6 @@ func connectToRemoteDocker(ctx echo.Context) error {
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	// We'll track grouped containers by Compose project, plus an ungrouped slice
 	groupsMap := make(map[string][]DockerContainer)
 	ungrouped := []DockerContainer{}
 
@@ -1102,11 +1155,10 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		if line == "" {
 			continue
 		}
-
 		parts := strings.Split(line, "|")
-		// We expect exactly 6 parts now: ID, Names, Image, Status, Ports, Labels
+		// ID, Name, Image, Status, Ports, Labels
 		if len(parts) != 6 {
-			logger.Errorf("Invalid format for container info: %s", line)
+			logger.Warnf("Invalid container info: %s", line)
 			continue
 		}
 
@@ -1119,34 +1171,64 @@ func connectToRemoteDocker(ctx echo.Context) error {
 			Labels: parts[5],
 		}
 
-		// Check if there is a 'com.docker.compose.project=' label
-		composeProject := parseComposeProjectLabel(container.Labels)
-		container.ComposeProject = composeProject
+		// Check for compose project
+		projectName := parseComposeProjectLabel(container.Labels)
+		container.ComposeProject = projectName
 
-		// Group by Compose project if present
-		if composeProject != "" {
-			groupsMap[composeProject] = append(groupsMap[composeProject], container)
+		if projectName != "" {
+			groupsMap[projectName] = append(groupsMap[projectName], container)
 		} else {
 			ungrouped = append(ungrouped, container)
 		}
 	}
 
-	// Build a slice of ComposeGroup
+	// Build final slice of ComposeGroup
 	var composeGroups []ComposeGroup
-	for project, containers := range groupsMap {
+	for projectName, containers := range groupsMap {
+		status := computeGroupStatus(containers)
 		composeGroups = append(composeGroups, ComposeGroup{
-			Name:       project,
+			Name:       projectName,
+			Status:     status,
 			Containers: containers,
 		})
 	}
 
-	// Create the final response
+	// Sort by project name
+	sort.Slice(composeGroups, func(i, j int) bool {
+		return composeGroups[i].Name < composeGroups[j].Name
+	})
+
 	response := DockerContainerResponse{
 		ComposeGroups: composeGroups,
 		Ungrouped:     ungrouped,
 	}
-
 	return ctx.JSON(http.StatusOK, response)
+}
+
+func computeGroupStatus(containers []DockerContainer) string {
+	if len(containers) == 0 {
+		return "No containers"
+	}
+
+	total := len(containers)
+	countUp := 0
+	for _, c := range containers {
+		if strings.Contains(strings.ToLower(c.Status), "up") {
+			countUp++
+		}
+	}
+
+	switch {
+	case countUp == 0:
+		// none up
+		return fmt.Sprintf("Stopped(%d)", total)
+	case countUp == total:
+		// all up
+		return fmt.Sprintf("Running(%d)", total)
+	default:
+		// partial
+		return fmt.Sprintf("Partial(%d/%d)", countUp, total)
+	}
 }
 
 // parseComposeProjectLabel checks if the label string contains "com.docker.compose.project=XYZ"
