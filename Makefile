@@ -30,6 +30,9 @@ set-extension-source: ## Set Docker extension dev source
 debug-ui: ## Debug the UI
 	docker extension dev debug egekocabas/remote-docker:latest
 
+validate-extension: ## Validate the extension
+	docker extension validate $(IMAGE):$(TAG)
+
 prepare-buildx: ## Create buildx builder for multi-arch build, if not exists
 	docker buildx inspect $(BUILDER) || docker buildx create --name=$(BUILDER) --driver=docker-container --driver-opt=network=host
 
