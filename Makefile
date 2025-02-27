@@ -19,7 +19,10 @@ run-client: ## Run the client
 	npm --prefix ui install && npm --prefix ui run dev
 
 set-extension-source: ## Set Docker extension dev source
-	docker extension dev ui-source egekocabas/remote-docker:latest http://localhost:3000 && docker extension dev debug egekocabas/remote-docker:latest
+	docker extension dev ui-source egekocabas/remote-docker:latest http://localhost:3000
+
+debug-ui: ## Debug the UI
+	docker extension dev debug egekocabas/remote-docker:latest
 
 prepare-buildx: ## Create buildx builder for multi-arch build, if not exists
 	docker buildx inspect $(BUILDER) || docker buildx create --name=$(BUILDER) --driver=docker-container --driver-opt=network=host

@@ -251,14 +251,15 @@ export function App() {
     <Box sx={{ display: 'flex' }}>
       <CssBaseline />
 
-      {/* App bar - FIXED STYLING */}
+      {/* App bar with EXPLICIT white background and better text alignment */}
       <AppBar
         position="fixed"
+        color="inherit" // This overrides the default primary color (blue)
         sx={{
           width: `calc(100% - ${drawerWidth}px)`,
           ml: `${drawerWidth}px`,
-          // Using the Docker Desktop style which is a very light gray with subtle border
-          bgcolor: 'background.paper',
+          // Setting explicit white/light background with !important to force override
+          bgcolor: '#ffffff !important', // Light mode
           color: 'text.primary',
           boxShadow: 'none',
           borderBottom: 1,
@@ -266,22 +267,27 @@ export function App() {
           zIndex: (theme) => theme.zIndex.drawer + 1
         }}
       >
-        <Toolbar sx={{ minHeight: '56px' }}>
+        <Toolbar sx={{
+          minHeight: '56px',
+          display: 'flex',
+          alignItems: 'center', // Center content vertically
+        }}>
           <Typography
             variant="h6"
-            noWrap
             component="div"
             sx={{
               flexGrow: 1,
               fontSize: '1rem',
               fontWeight: 500,
-              color: theme.palette.mode === 'dark' ? 'white' : 'inherit'
+              display: 'flex',
+              alignItems: 'center', // Ensure text is vertically centered
+              height: '100%'
             }}
           >
             {navItems.find(item => item.key === currentPage)?.label || 'Remote Docker'}
           </Typography>
 
-          {/* Environment selector dropdown - FIXED STYLING */}
+          {/* Environment selector dropdown with improved styling */}
           {currentPage !== 'environments' && settings.environments.length > 0 && (
             <FormControl
               variant="outlined"
@@ -290,18 +296,14 @@ export function App() {
                 minWidth: 180,
                 '& .MuiOutlinedInput-root': {
                   borderRadius: 1,
-                  backgroundColor: theme.palette.mode === 'dark'
-                    ? 'rgba(255, 255, 255, 0.05)'
-                    : 'rgba(0, 0, 0, 0.03)'
+                  backgroundColor: 'rgba(0, 0, 0, 0.03)'
                 },
                 '& .MuiSelect-select': {
                   py: 1,
-                  // Ensure text is visible
-                  color: theme.palette.mode === 'dark' ? 'white' : 'text.primary'
+                  color: 'text.primary'
                 },
                 '& .MuiInputLabel-root': {
-                  // Ensure label is visible
-                  color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)'
+                  color: 'rgba(0, 0, 0, 0.6)'
                 }
               }}
             >
