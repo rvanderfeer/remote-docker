@@ -96,6 +96,9 @@ export function App() {
   const [isTunnelLoading, setIsTunnelLoading] = useState(false);
   const visibilityRef = useRef(true);
 
+  // New state for logs modal context
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
+
   // Navigation items
   const navItems: NavItem[] = [
     { key: 'dashboard', label: 'Dashboard', icon: <DashboardIcon />, category: 'docker' },
@@ -356,6 +359,8 @@ export function App() {
           <Containers
             activeEnvironment={activeEnvironment}
             settings={settings}
+            isLogsOpen={isLogsOpen}
+            setIsLogsOpen={setIsLogsOpen}
           />
         );
       case 'images':
@@ -411,12 +416,14 @@ export function App() {
         sx={{
           width: `calc(100% - ${drawerWidth}px)`,
           ml: `${drawerWidth}px`,
-          bgcolor: '#ffffff !important',
+          bgcolor: isLogsOpen ? 'rgba(0, 0, 0, 0.04) !important' : '#ffffff !important',
           color: 'text.primary',
           boxShadow: 'none',
           borderBottom: 1,
           borderColor: 'divider',
-          zIndex: (theme) => theme.zIndex.drawer + 1
+          zIndex: (theme) => theme.zIndex.drawer + 1,
+          transition: 'background-color 0.2s ease',
+          filter: isLogsOpen ? 'brightness(0.97)' : 'none'
         }}
       >
         <Toolbar sx={{
@@ -507,6 +514,7 @@ export function App() {
                 value={settings.activeEnvironmentId || "none"}
                 label="Environment"
                 onChange={handleEnvironmentChange}
+                disabled={isLogsOpen} // Disable while logs are open
               >
                 <MenuItem value="none">-- Select Environment --</MenuItem>
                 {settings.environments.map((env) => (
@@ -545,7 +553,10 @@ export function App() {
             width: drawerWidth,
             boxSizing: 'border-box',
             borderRight: 1,
-            borderColor: 'divider'
+            borderColor: 'divider',
+            bgcolor: isLogsOpen ? 'rgba(0, 0, 0, 0.04)' : 'inherit',
+            filter: isLogsOpen ? 'brightness(0.97)' : 'none',
+            transition: 'background-color 0.2s ease'
           },
         }}
         variant="permanent"
@@ -577,6 +588,7 @@ export function App() {
               <ListItemButton
                 selected={currentPage === item.key}
                 onClick={() => setCurrentPage(item.key)}
+                disabled={isLogsOpen} // Disable while logs are open
                 sx={{
                   py: 1,
                   minHeight: 48,
@@ -610,6 +622,7 @@ export function App() {
               <ListItemButton
                 selected={currentPage === item.key}
                 onClick={() => setCurrentPage(item.key)}
+                disabled={isLogsOpen} // Disable while logs are open
                 sx={{
                   py: 1,
                   minHeight: 48,
@@ -643,7 +656,10 @@ export function App() {
           flexGrow: 1,
           p: 3,
           mt: '56px', // Matches the toolbar height
-          overflow: 'auto'
+          overflow: 'auto',
+          bgcolor: isLogsOpen ? 'rgba(0, 0, 0, 0.04)' : 'inherit',
+          filter: isLogsOpen ? 'brightness(0.97)' : 'none',
+          transition: 'background-color 0.2s ease'
         }}
       >
         {error && (

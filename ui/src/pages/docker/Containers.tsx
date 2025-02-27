@@ -14,12 +14,15 @@ import {
   Typography,
   IconButton,
   Tooltip,
-  Chip
+  Chip,
+  Drawer
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { Environment, ExtensionSettings } from '../../App';
 import AutoRefreshControls from '../../components/AutoRefreshControls';
+import ContainerLogs from './ContainerLogs';
 
 // Container interface
 interface Container {
@@ -38,6 +41,8 @@ interface ErrorResponse {
 interface ContainersProps {
   activeEnvironment?: Environment;
   settings: ExtensionSettings;
+  isLogsOpen: boolean;
+  setIsLogsOpen: (isOpen: boolean) => void;
 }
 
 const client = createDockerDesktopClient();
@@ -46,7 +51,12 @@ function useDockerDesktopClient() {
   return client;
 }
 
-const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) => {
+const Containers: React.FC<ContainersProps> = ({
+                                                 activeEnvironment,
+                                                 settings,
+                                                 isLogsOpen,
+                                                 setIsLogsOpen
+                                               }) => {
   const [containers, setContainers] = useState<Container[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -57,6 +67,9 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
   const [refreshInterval, setRefreshInterval] = useState(30); // Default 30 seconds
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false); // For refresh indicator overlay
+
+  // Container logs states
+  const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
 
   // Load containers when active environment changes
   useEffect(() => {
@@ -226,6 +239,18 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
     setRefreshInterval(interval);
   };
 
+  // View container logs
+  const viewContainerLogs = (container: Container) => {
+    setSelectedContainer(container);
+    setIsLogsOpen(true); // Update parent component state
+  };
+
+  // Close logs drawer
+  const closeLogs = () => {
+    setIsLogsOpen(false); // Update parent component state
+    setSelectedContainer(null);
+  };
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -236,7 +261,7 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
           refreshInterval={refreshInterval}
           lastRefreshTime={lastRefreshTime}
           isRefreshing={isRefreshing}
-          isDisabled={!activeEnvironment}
+          isDisabled={!activeEnvironment || isLogsOpen}
           onRefreshClick={loadContainers}
           onAutoRefreshChange={handleAutoRefreshChange}
           onIntervalChange={handleIntervalChange}
@@ -316,29 +341,45 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
                       />
                     </TableCell>
                     <TableCell align="right">
-                      {isRunning(container.status) ? (
-                        <Tooltip title="Stop">
+                      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        {/* View logs button */}
+                        <Tooltip title="View Logs">
                           <IconButton
                             size="small"
-                            color="error"
-                            onClick={() => stopContainer(container.id)}
-                            disabled={isRefreshing}
+                            color="primary"
+                            onClick={() => viewContainerLogs(container)}
+                            disabled={isRefreshing || isLogsOpen}
+                            sx={{ mr: 1 }}
                           >
-                            <StopIcon fontSize="small" />
+                            <VisibilityIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                      ) : (
-                        <Tooltip title="Start">
-                          <IconButton
-                            size="small"
-                            color="success"
-                            onClick={() => startContainer(container.id)}
-                            disabled={isRefreshing}
-                          >
-                            <PlayArrowIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      )}
+
+                        {/* Start/Stop button */}
+                        {isRunning(container.status) ? (
+                          <Tooltip title="Stop">
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => stopContainer(container.id)}
+                              disabled={isRefreshing || isLogsOpen}
+                            >
+                              <StopIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title="Start">
+                            <IconButton
+                              size="small"
+                              color="success"
+                              onClick={() => startContainer(container.id)}
+                              disabled={isRefreshing || isLogsOpen}
+                            >
+                              <PlayArrowIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </Box>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -351,6 +392,32 @@ const Containers: React.FC<ContainersProps> = ({ activeEnvironment, settings }) 
           No containers found in the selected environment.
         </Alert>
       ) : null}
+
+      {/* Logs drawer */}
+      <Drawer
+        anchor="bottom"
+        open={isLogsOpen}
+        onClose={closeLogs}
+        sx={{
+          '& .MuiDrawer-paper': {
+            height: '90%',
+            boxShadow: 3,
+            borderTopLeftRadius: 8,
+            borderTopRightRadius: 8,
+          },
+        }}
+      >
+        {selectedContainer && (
+          <Box sx={{ p: 2, height: '100%' }}>
+            <ContainerLogs
+              activeEnvironment={activeEnvironment}
+              containerId={selectedContainer.id}
+              containerName={selectedContainer.name}
+              onClose={closeLogs}
+            />
+          </Box>
+        )}
+      </Drawer>
     </Box>
   );
 };
