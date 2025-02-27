@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -126,7 +125,7 @@ func main() {
 	router.POST("/networks/list", listNetworks)
 	router.POST("/networks/remove", removeNetwork)
 
-	router.GET("/container/logs", getContainerLogs)
+	router.POST("/container/logs", getContainerLogs)
 
 	// Graceful shutdown handling
 	c := make(chan os.Signal, 1)
@@ -146,7 +145,6 @@ type ContainerLogsRequest struct {
 	Username    string `json:"username"`
 	ContainerId string `json:"containerId"`
 	Tail        int    `json:"tail"`       // Number of lines to show from the end
-	Follow      bool   `json:"follow"`     // Follow log output
 	Timestamps  bool   `json:"timestamps"` // Show timestamps
 }
 
@@ -170,154 +168,39 @@ func getContainerLogs(ctx echo.Context) error {
 	if req.Tail > 0 {
 		dockerCmd.WriteString(fmt.Sprintf(" --tail %d", req.Tail))
 	}
-	if req.Follow {
-		dockerCmd.WriteString(" --follow")
-	}
 	if req.Timestamps {
 		dockerCmd.WriteString(" --timestamps")
 	}
-
-	// Add --colors to preserve ANSI color codes
-	dockerCmd.WriteString(" --colors")
 
 	// Add container ID
 	dockerCmd.WriteString(fmt.Sprintf(" %s", req.ContainerId))
 
 	logger.Infof("Executing log command: %s", dockerCmd.String())
 
-	// Get SSH connection
-	m := tunnelManager
-	m.mutex.Lock()
-	key := connectionKey(req.Username, req.Hostname)
-	conn, exists := m.activeConnections[key]
-
-	if !exists || !conn.Active {
-		// No active connection, try to open one
-		m.mutex.Unlock()
-		if err := m.OpenConnection(req.Username, req.Hostname); err != nil {
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("Failed to open connection: %v", err),
-			})
-		}
-		m.mutex.Lock()
-		conn = m.activeConnections[key]
-	}
-
-	// Update last used time
-	conn.LastUsed = time.Now()
-	controlPath := conn.ControlPath
-	m.mutex.Unlock()
-
-	// Set up streaming command
-	cmd := exec.Command("ssh",
-		"-S", controlPath,
-		"-o", "StrictHostKeyChecking=no",
-		fmt.Sprintf("%s@%s", req.Username, req.Hostname),
-		dockerCmd.String(),
-	)
-
-	// Create pipes for stdout and stderr
-	stdout, err := cmd.StdoutPipe()
+	// Execute command using SSH tunnel
+	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCmd.String())
 	if err != nil {
+		logger.Errorf("Error reading logs: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to create stdout pipe: %v", err),
+			"error":  fmt.Sprintf("Failed to read logs: %v", err),
+			"output": string(output),
 		})
 	}
 
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to create stderr pipe: %v", err),
-		})
+	// Split into lines for returning a JSON array
+	lines := strings.Split(string(output), "\n")
+	// If the last line is empty, trim it
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
 
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to start logs command: %v", err),
-		})
-	}
-
-	// Set response headers for streaming
-	ctx.Response().Header().Set("Content-Type", "text/event-stream")
-	ctx.Response().Header().Set("Cache-Control", "no-cache")
-	ctx.Response().Header().Set("Connection", "keep-alive")
-	ctx.Response().WriteHeader(http.StatusOK)
-
-	// Create a done channel to signal when to stop
-	done := make(chan bool)
-
-	// Handle client disconnection
-	go func() {
-		<-ctx.Request().Context().Done()
-		logger.Info("Client disconnected from logs stream")
-		cmd.Process.Kill()
-		done <- true
-	}()
-
-	// Start a keepalive goroutine to update LastUsed timestamp periodically
-	// This prevents the connection from being considered idle and closed by the cleanup routine
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				// Update the LastUsed timestamp to prevent idle timeout
-				m.mutex.Lock()
-				if conn, exists := m.activeConnections[key]; exists && conn.Active {
-					conn.LastUsed = time.Now()
-					logger.Debugf("Updated LastUsed timestamp for SSH connection %s during log streaming", key)
-				}
-				m.mutex.Unlock()
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	// Stream stdout
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			// Format as Server-Sent Event
-			fmt.Fprintf(ctx.Response(), "data: %s\n\n", line)
-			ctx.Response().Flush()
-		}
-	}()
-
-	// Stream stderr (for error messages)
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			// Format as Server-Sent Event
-			fmt.Fprintf(ctx.Response(), "data: %s\n\n", line)
-			ctx.Response().Flush()
-		}
-	}()
-
-	// Wait for command to finish or client to disconnect
-	select {
-	case <-done:
-		return nil
-	case err := <-cmdDone(cmd):
-		if err != nil && !req.Follow {
-			logger.Warnf("Logs command exited with error: %v", err)
-		}
-		return nil
-	}
+	return ctx.JSON(http.StatusOK, ContainerLogsResponse{Success: "true", Logs: lines})
 }
 
-// Helper function to wait for command completion
-func cmdDone(cmd *exec.Cmd) chan error {
-	ch := make(chan error)
-	go func() {
-		ch <- cmd.Wait()
-	}()
-	return ch
+// ContainerLogsResponse is what we'll return in JSON.
+type ContainerLogsResponse struct {
+	Success string   `json:"success"`
+	Logs    []string `json:"logs"`
 }
 
 // Create a new SSH tunnel manager
