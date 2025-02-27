@@ -321,8 +321,8 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 		"-M",              // Master mode for connection sharing
 		"-S", controlPath, // Control socket path
 		"-o", "ControlPersist=yes",
-		"-o", "ServerAliveInterval=60",
-		"-o", "ServerAliveCountMax=3",
+		"-o", "ServerAliveInterval=10",
+		"-o", "ServerAliveCountMax=2",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "BatchMode=yes", // Non-interactive mode
 		"-N", // Don't execute any command, just forward
@@ -340,6 +340,7 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 
 	// Check if connection was successful by running a test command
 	testCmd := exec.Command("ssh",
+		"-o ConnectTimeout=5",
 		"-S", controlPath,
 		"-o", "StrictHostKeyChecking=no",
 		fmt.Sprintf("%s@%s", username, hostname),
@@ -380,6 +381,7 @@ func (m *SSHTunnelManager) CloseConnection(username, hostname string) error {
 
 	// Close the connection using control socket
 	closeCmd := exec.Command("ssh",
+		"-o ConnectTimeout=5",
 		"-S", conn.ControlPath,
 		"-O", "exit", // Send exit command to master process
 		fmt.Sprintf("%s@%s", username, hostname),
@@ -418,6 +420,7 @@ func (m *SSHTunnelManager) CloseAllConnections() {
 		if conn.Active {
 			// Close the connection using control socket
 			closeCmd := exec.Command("ssh",
+				"-o ConnectTimeout=5",
 				"-S", conn.ControlPath,
 				"-O", "exit",
 				fmt.Sprintf("%s@%s", conn.Username, conn.Hostname),
@@ -467,6 +470,7 @@ func (m *SSHTunnelManager) ExecuteCommand(username, hostname, command string) ([
 
 	// Execute command using the control socket
 	cmd := exec.Command("ssh",
+		"-o ConnectTimeout=5",
 		"-S", controlPath,
 		"-o", "StrictHostKeyChecking=no",
 		fmt.Sprintf("%s@%s", username, hostname),
@@ -490,6 +494,7 @@ func (m *SSHTunnelManager) IsConnectionActive(username, hostname string) bool {
 
 	// Test connection by running a simple command
 	testCmd := exec.Command("ssh",
+		"-o ConnectTimeout=5",
 		"-S", conn.ControlPath,
 		"-o", "StrictHostKeyChecking=no",
 		fmt.Sprintf("%s@%s", username, hostname),
@@ -531,6 +536,7 @@ func (m *SSHTunnelManager) CleanupIdleConnections(idleTimeout time.Duration) {
 
 			// Close the connection using control socket
 			closeCmd := exec.Command("ssh",
+				"-o ConnectTimeout=5",
 				"-S", conn.ControlPath,
 				"-O", "exit",
 				fmt.Sprintf("%s@%s", conn.Username, conn.Hostname),
