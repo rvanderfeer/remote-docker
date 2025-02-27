@@ -567,8 +567,8 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
         sx={{
           flexGrow: 1,
           overflow: 'auto',
-          bgcolor: '#1e1e1e',
-          color: '#d4d4d4',
+          bgcolor: (theme) => theme.palette.mode === 'dark' ? '#000000' : '#ffffff',
+          color: (theme) => theme.palette.mode === 'dark' ? '#ffffff' : '#000000',
           p: 1,
           fontFamily: 'monospace',
           fontSize: `${logFontSize}rem`,
