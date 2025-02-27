@@ -358,15 +358,6 @@ export function App() {
         />
       );
     }
-    else if (currentPage === 'dashboard') {
-      return (
-        <Dashboard
-          activeEnvironment={activeEnvironment}
-          settings={settings}
-          onSetActiveEnvironment={setActiveEnvironment}
-        />
-      );
-    }
 
     if (!isTunnelActive) {
       return (
@@ -380,6 +371,14 @@ export function App() {
 
 
     switch (currentPage) {
+      case 'dashboard':
+        return (
+          <Dashboard
+            activeEnvironment={activeEnvironment}
+            settings={settings}
+            onSetActiveEnvironment={setActiveEnvironment}
+          />
+        );
       case 'containers':
         return (
           <Containers

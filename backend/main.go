@@ -216,12 +216,10 @@ type SystemInfoResponse struct {
 	DockerVersion    string `json:"dockerVersion"`
 	APIVersion       string `json:"apiVersion"`
 	OS               string `json:"os"`
-	Kernel           string `json:"kernel"`
 	Architecture     string `json:"architecture"`
 	CPUs             int    `json:"cpus"`
 	Memory           string `json:"memory"`
 	DockerRoot       string `json:"dockerRoot"`
-	ContainersRoot   string `json:"containersRoot"`
 	ServerTime       string `json:"serverTime"`
 	ExperimentalMode bool   `json:"experimentalMode"`
 }
@@ -233,7 +231,6 @@ type DockerEvent struct {
 	Type     string `json:"type"`     // container, image, volume, network
 	Action   string `json:"action"`   // create, start, stop, destroy, etc.
 	Actor    string `json:"actor"`    // Name/ID of the object
-	Scope    string `json:"scope"`    // local or swarm
 	Status   string `json:"status"`   // success or error (if applicable)
 	Message  string `json:"message"`  // Additional details
 	Category string `json:"category"` // info, warning, error
@@ -263,8 +260,8 @@ func getDashboardOverview(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// Gather container statistics
-	containerCmd := "docker ps -a --format '{{.Status}}' | wc -l && docker ps --format '{{.Status}}' | wc -l"
+	// Gather container statistics - using simpler commands
+	containerCmd := "docker ps -a | wc -l && docker ps | wc -l"
 	containerOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, containerCmd)
 	if err != nil {
 		logger.Errorf("Error getting container stats: %v", err)
@@ -273,16 +270,33 @@ func getDashboardOverview(ctx echo.Context) error {
 		})
 	}
 
-	// Parse container counts
+	// Parse container counts (accounting for header row)
 	containerLines := strings.Split(strings.TrimSpace(string(containerOutput)), "\n")
 	totalContainers, runningContainers := 0, 0
 	if len(containerLines) >= 2 {
-		totalContainers, _ = strconv.Atoi(strings.TrimSpace(containerLines[0]))
-		runningContainers, _ = strconv.Atoi(strings.TrimSpace(containerLines[1]))
+		total, err := strconv.Atoi(strings.TrimSpace(containerLines[0]))
+		if err == nil {
+			// Subtract 1 for the header row
+			totalContainers = total - 1
+		}
+
+		running, err := strconv.Atoi(strings.TrimSpace(containerLines[1]))
+		if err == nil {
+			// Subtract 1 for the header row
+			runningContainers = running - 1
+		}
 	}
 
-	// Gather image statistics
-	imageCmd := "docker image ls --format '{{.Size}}' | wc -l && docker system df --format '{{.Size}}' | grep Images | awk '{print $4}'"
+	// Ensure we don't have negative values due to header subtraction
+	if totalContainers < 0 {
+		totalContainers = 0
+	}
+	if runningContainers < 0 {
+		runningContainers = 0
+	}
+
+	// Gather image statistics - simpler approach
+	imageCmd := "docker images | wc -l"
 	imageOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, imageCmd)
 	if err != nil {
 		logger.Errorf("Error getting image stats: %v", err)
@@ -291,49 +305,58 @@ func getDashboardOverview(ctx echo.Context) error {
 		})
 	}
 
-	// Parse image counts and size
-	imageLines := strings.Split(strings.TrimSpace(string(imageOutput)), "\n")
+	// Parse image count (accounting for header row)
 	totalImages := 0
-	imageSize := "0B"
-	if len(imageLines) >= 1 {
-		totalImages, _ = strconv.Atoi(strings.TrimSpace(imageLines[0]))
-		if len(imageLines) >= 2 {
-			imageSize = strings.TrimSpace(imageLines[1])
+	if len(imageOutput) > 0 {
+		count, err := strconv.Atoi(strings.TrimSpace(string(imageOutput)))
+		if err == nil && count > 0 {
+			totalImages = count - 1 // Subtract 1 for the header
+		}
+	}
+
+	// Gather disk usage for images (more basic approach)
+	imageSizeCmd := "docker system df | grep Images || echo 'N/A'"
+	imageSizeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, imageSizeCmd)
+	imageSize := "N/A"
+	if err == nil && len(imageSizeOutput) > 0 {
+		imageSizeLine := strings.TrimSpace(string(imageSizeOutput))
+		if imageSizeLine != "N/A" {
+			fields := strings.Fields(imageSizeLine)
+			if len(fields) >= 4 {
+				imageSize = fields[3]
+			}
 		}
 	}
 
 	// Gather volume statistics
-	volumeCmd := "docker volume ls --format '{{.Name}}' | wc -l"
+	volumeCmd := "docker volume ls | wc -l"
 	volumeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, volumeCmd)
-	if err != nil {
-		logger.Errorf("Error getting volume stats: %v", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get volume statistics: %v", err),
-		})
+	totalVolumes := 0
+	if err == nil && len(volumeOutput) > 0 {
+		count, err := strconv.Atoi(strings.TrimSpace(string(volumeOutput)))
+		if err == nil && count > 0 {
+			totalVolumes = count - 1 // Subtract 1 for the header
+		}
 	}
-	totalVolumes, _ := strconv.Atoi(strings.TrimSpace(string(volumeOutput)))
 
 	// Gather network statistics
-	networkCmd := "docker network ls --format '{{.Name}}' | wc -l"
+	networkCmd := "docker network ls | wc -l"
 	networkOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, networkCmd)
-	if err != nil {
-		logger.Errorf("Error getting network stats: %v", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get network statistics: %v", err),
-		})
+	totalNetworks := 0
+	if err == nil && len(networkOutput) > 0 {
+		count, err := strconv.Atoi(strings.TrimSpace(string(networkOutput)))
+		if err == nil && count > 0 {
+			totalNetworks = count - 1 // Subtract 1 for the header
+		}
 	}
-	totalNetworks, _ := strconv.Atoi(strings.TrimSpace(string(networkOutput)))
 
-	// Gather compose project statistics
-	composeCmd := "docker ps --format '{{.Labels}}' | grep -o 'com.docker.compose.project=[^ ,]*' | sort | uniq | wc -l"
+	// Gather compose project statistics (more tolerant approach)
+	composeCmd := "docker ps --format '{{.Labels}}' | grep -c 'com.docker.compose.project' || echo 0"
 	composeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, composeCmd)
-	if err != nil {
-		logger.Errorf("Error getting compose stats: %v", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get compose statistics: %v", err),
-		})
+	totalCompose := 0
+	if err == nil && len(composeOutput) > 0 {
+		totalCompose, _ = strconv.Atoi(strings.TrimSpace(string(composeOutput)))
 	}
-	totalCompose, _ := strconv.Atoi(strings.TrimSpace(string(composeOutput)))
 
 	// Build the response
 	overview := DashboardOverview{}
@@ -365,7 +388,8 @@ func getDashboardResources(ctx echo.Context) error {
 	}
 
 	// Get container resource usage with docker stats
-	statsCmd := "docker stats --no-stream --format 'table {{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}'"
+	// Using a simpler format string that's more likely to work across different Docker versions
+	statsCmd := "docker stats --no-stream --format 'table {{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}' || docker stats --no-stream"
 	statsOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, statsCmd)
 	if err != nil {
 		logger.Errorf("Error getting resource stats: %v", err)
@@ -378,51 +402,118 @@ func getDashboardResources(ctx echo.Context) error {
 	lines := strings.Split(strings.TrimSpace(string(statsOutput)), "\n")
 	containers := make([]ContainerResource, 0)
 
-	// Skip the header row
+	// Skip the header row, process all rows even if we don't have delimiters
 	for i := 1; i < len(lines); i++ {
-		fields := strings.Split(lines[i], "|")
+		line := lines[i]
+
+		// Try to parse with our delimiter first
+		fields := strings.Split(line, "|")
+
+		// If our custom format didn't work, we'll have the default docker stats output
+		// Try to parse using standard spaces as delimiters
 		if len(fields) < 7 {
+			// Default docker stats has columns separated by variable whitespace
+			// We'll make a best effort to parse it
+			fields = strings.Fields(line)
+			if len(fields) < 7 {
+				continue // Not enough fields, skip this line
+			}
+
+			// With default stats, order is different:
+			// CONTAINER ID, NAME, CPU %, MEM USAGE / LIMIT, MEM %, NET I/O, BLOCK I/O, PIDS
+
+			id := fields[0]
+			name := fields[1]
+			cpuPerc := fields[2]
+			memUsage := fields[3] + " " + fields[4] + " " + fields[5]
+			memPerc := fields[6]
+			netIO := "N/A"
+			blockIO := "N/A"
+
+			if len(fields) >= 8 {
+				netIO = fields[7]
+			}
+			if len(fields) >= 9 {
+				blockIO = fields[8]
+			}
+
+			// Parse CPU percentage
+			cpuValue := 0.0
+			if strings.Contains(cpuPerc, "%") {
+				cpuValue, _ = strconv.ParseFloat(strings.TrimSuffix(cpuPerc, "%"), 64)
+			}
+
+			// Parse memory percentage
+			memValue := 0.0
+			if strings.Contains(memPerc, "%") {
+				memValue, _ = strconv.ParseFloat(strings.TrimSuffix(memPerc, "%"), 64)
+			}
+
+			container := ContainerResource{
+				ID:       id,
+				Name:     name,
+				CPUPerc:  cpuPerc,
+				CPUUsage: cpuValue,
+				MemUsage: memUsage,
+				MemPerc:  memPerc,
+				MemValue: memValue,
+				NetIO:    netIO,
+				BlockIO:  blockIO,
+			}
+
+			containers = append(containers, container)
 			continue
 		}
 
-		// Parse CPU percentage
-		cpuPerc := strings.TrimSpace(fields[2])
-		cpuValue, _ := strconv.ParseFloat(strings.TrimSuffix(cpuPerc, "%"), 64)
+		// If we have our expected delimiter format
+		if len(fields) >= 7 {
+			// Parse CPU percentage
+			cpuPerc := strings.TrimSpace(fields[2])
+			cpuValue, _ := strconv.ParseFloat(strings.TrimSuffix(cpuPerc, "%"), 64)
 
-		// Parse memory percentage
-		memPerc := strings.TrimSpace(fields[4])
-		memValue, _ := strconv.ParseFloat(strings.TrimSuffix(memPerc, "%"), 64)
+			// Parse memory percentage
+			memPerc := strings.TrimSpace(fields[4])
+			memValue, _ := strconv.ParseFloat(strings.TrimSuffix(memPerc, "%"), 64)
 
-		container := ContainerResource{
-			ID:       strings.TrimSpace(fields[0]),
-			Name:     strings.TrimSpace(fields[1]),
-			CPUPerc:  cpuPerc,
-			CPUUsage: cpuValue,
-			MemUsage: strings.TrimSpace(fields[3]),
-			MemPerc:  memPerc,
-			MemValue: memValue,
-			NetIO:    strings.TrimSpace(fields[5]),
-			BlockIO:  strings.TrimSpace(fields[6]),
+			container := ContainerResource{
+				ID:       strings.TrimSpace(fields[0]),
+				Name:     strings.TrimSpace(fields[1]),
+				CPUPerc:  cpuPerc,
+				CPUUsage: cpuValue,
+				MemUsage: strings.TrimSpace(fields[3]),
+				MemPerc:  memPerc,
+				MemValue: memValue,
+				NetIO:    strings.TrimSpace(fields[5]),
+				BlockIO:  strings.TrimSpace(fields[6]),
+			}
+
+			containers = append(containers, container)
 		}
-
-		containers = append(containers, container)
 	}
 
-	// Get system resource usage (this is more complex and might require additional commands)
-	systemCmd := "echo $(top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}') $(free | grep Mem | awk '{print $3/$2 * 100}') $(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')"
-	systemOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, systemCmd)
-	if err != nil {
-		logger.Warnf("Error getting system stats, will use defaults: %v", err)
-		// Continue with default values
+	// Get system resource usage using more basic commands that are more likely to be available
+	// First, try a simpler CPU usage check
+	cpuUsage := 0.0
+	cpuCmd := "top -bn1 | grep '%Cpu' | awk '{print 100 - $8}' || echo 0"
+	cpuOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, cpuCmd)
+	if err == nil && len(cpuOutput) > 0 {
+		cpuUsage, _ = strconv.ParseFloat(strings.TrimSpace(string(cpuOutput)), 64)
 	}
 
-	// Parse system resource usage
-	cpuUsage, memUsage, diskUsage := 0.0, 0.0, 0.0
-	systemFields := strings.Split(strings.TrimSpace(string(systemOutput)), " ")
-	if len(systemFields) >= 3 {
-		cpuUsage, _ = strconv.ParseFloat(systemFields[0], 64)
-		memUsage, _ = strconv.ParseFloat(systemFields[1], 64)
-		diskUsage, _ = strconv.ParseFloat(systemFields[2], 64)
+	// Memory usage
+	memUsage := 0.0
+	memCmd := "free | grep Mem | awk '{print $3/$2 * 100}' || echo 0"
+	memOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, memCmd)
+	if err == nil && len(memOutput) > 0 {
+		memUsage, _ = strconv.ParseFloat(strings.TrimSpace(string(memOutput)), 64)
+	}
+
+	// Disk usage
+	diskUsage := 0.0
+	diskCmd := "df -h / | awk 'NR==2 {print $5}' | sed 's/%//' || echo 0"
+	diskOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, diskCmd)
+	if err == nil && len(diskOutput) > 0 {
+		diskUsage, _ = strconv.ParseFloat(strings.TrimSpace(string(diskOutput)), 64)
 	}
 
 	// Build the response
@@ -436,7 +527,7 @@ func getDashboardResources(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, resources)
 }
 
-// Get Docker system information
+// Get Docker system information - simplified to avoid version-specific commands
 func getDashboardSystemInfo(ctx echo.Context) error {
 	var req DashboardRequest
 	if err := ctx.Bind(&req); err != nil {
@@ -447,52 +538,83 @@ func getDashboardSystemInfo(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// Get Docker version and system info
-	infoCmd := "docker version --format '{{.Server.Version}}|{{.Server.APIVersion}}|{{.Server.Os}}|{{.Server.KernelVersion}}|{{.Server.Architecture}}' && docker info --format '{{.NCPU}}|{{.MemTotal}}|{{.DockerRootDir}}|{{.ContainersRuntime}}|{{.ExperimentalBuild}}'"
-	infoOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, infoCmd)
-	if err != nil {
-		logger.Errorf("Error getting system info: %v", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get system information: %v", err),
-		})
+	// Create a response with defaults
+	info := SystemInfoResponse{
+		DockerVersion:    "Unknown",
+		APIVersion:       "Unknown",
+		OS:               "Unknown",
+		Architecture:     "Unknown",
+		CPUs:             0,
+		Memory:           "Unknown",
+		DockerRoot:       "Unknown",
+		ServerTime:       "Unknown",
+		ExperimentalMode: false,
 	}
 
-	// Parse system info
-	lines := strings.Split(strings.TrimSpace(string(infoOutput)), "\n")
-	if len(lines) < 2 {
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Invalid response format from server",
-		})
+	// Get Docker version - simple command
+	versionCmd := "docker version | grep 'Server Version' | awk '{print $3}' || echo 'Unknown'"
+	versionOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, versionCmd)
+	if err == nil && len(versionOutput) > 0 {
+		info.DockerVersion = strings.TrimSpace(string(versionOutput))
 	}
 
-	versionFields := strings.Split(lines[0], "|")
-	infoFields := strings.Split(lines[1], "|")
+	// Get API version - simple command
+	apiCmd := "docker version | grep 'API version' | head -1 | awk '{print $3}' || echo 'Unknown'"
+	apiOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, apiCmd)
+	if err == nil && len(apiOutput) > 0 {
+		info.APIVersion = strings.TrimSpace(string(apiOutput))
+	}
+
+	// Get OS info
+	osCmd := "uname -s || echo 'Unknown'"
+	osOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, osCmd)
+	if err == nil && len(osOutput) > 0 {
+		info.OS = strings.TrimSpace(string(osOutput))
+	}
+
+	// Get architecture
+	archCmd := "uname -m || echo 'Unknown'"
+	archOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, archCmd)
+	if err == nil && len(archOutput) > 0 {
+		info.Architecture = strings.TrimSpace(string(archOutput))
+	}
+
+	// Get CPU count
+	cpuCmd := "nproc || echo 0"
+	cpuOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, cpuCmd)
+	if err == nil && len(cpuOutput) > 0 {
+		cpus, err := strconv.Atoi(strings.TrimSpace(string(cpuOutput)))
+		if err == nil {
+			info.CPUs = cpus
+		}
+	}
+
+	// Get memory
+	memCmd := "free -h | grep Mem | awk '{print $2}' || echo 'Unknown'"
+	memOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, memCmd)
+	if err == nil && len(memOutput) > 0 {
+		info.Memory = strings.TrimSpace(string(memOutput))
+	}
+
+	// Get Docker root directory
+	rootCmd := "docker info | grep 'Docker Root Dir' | awk '{print $4}' || echo 'Unknown'"
+	rootOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, rootCmd)
+	if err == nil && len(rootOutput) > 0 {
+		info.DockerRoot = strings.TrimSpace(string(rootOutput))
+	}
 
 	// Get server time
-	timeCmd := "date +'%Y-%m-%d %H:%M:%S %Z'"
-	timeOutput, _ := tunnelManager.ExecuteCommand(req.Username, req.Hostname, timeCmd)
-	serverTime := strings.TrimSpace(string(timeOutput))
-
-	// Build the response
-	info := SystemInfoResponse{
-		ServerTime: serverTime,
+	timeCmd := "date +'%Y-%m-%d %H:%M:%S %Z' || echo 'Unknown'"
+	timeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, timeCmd)
+	if err == nil && len(timeOutput) > 0 {
+		info.ServerTime = strings.TrimSpace(string(timeOutput))
 	}
 
-	if len(versionFields) >= 5 {
-		info.DockerVersion = versionFields[0]
-		info.APIVersion = versionFields[1]
-		info.OS = versionFields[2]
-		info.Kernel = versionFields[3]
-		info.Architecture = versionFields[4]
-	}
-
-	if len(infoFields) >= 5 {
-		info.CPUs, _ = strconv.Atoi(infoFields[0])
-		memBytes, _ := strconv.ParseFloat(infoFields[1], 64)
-		info.Memory = fmt.Sprintf("%.2f GiB", memBytes/(1024*1024*1024))
-		info.DockerRoot = infoFields[2]
-		info.ContainersRoot = infoFields[3]
-		info.ExperimentalMode = infoFields[4] == "true"
+	// Check if experimental mode is enabled
+	expCmd := "docker info | grep -q 'Experimental: true' && echo 'true' || echo 'false'"
+	expOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, expCmd)
+	if err == nil && len(expOutput) > 0 {
+		info.ExperimentalMode = strings.TrimSpace(string(expOutput)) == "true"
 	}
 
 	return ctx.JSON(http.StatusOK, info)
@@ -509,14 +631,13 @@ func getDashboardEvents(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	// Get recent Docker events (last 50 events)
-	eventsCmd := "docker events --format '{{json .}}' --since 24h --until 0s | tail -50"
+	// Get recent Docker events (up to 20 events, simpler command)
+	eventsCmd := "docker events --format '{{json .}}' --since 24h --until 0s | tail -20 || echo '[]'"
 	eventsOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, eventsCmd)
 	if err != nil {
 		logger.Errorf("Error getting Docker events: %v", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get Docker events: %v", err),
-		})
+		// Return empty events array rather than an error
+		return ctx.JSON(http.StatusOK, EventsResponse{Events: []DockerEvent{}})
 	}
 
 	// Parse events
@@ -524,7 +645,7 @@ func getDashboardEvents(ctx echo.Context) error {
 	events := make([]DockerEvent, 0)
 
 	for _, line := range lines {
-		if line == "" {
+		if line == "" || line == "[]" {
 			continue
 		}
 
