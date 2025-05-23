@@ -1,5 +1,5 @@
-IMAGE?=egekocabas/remote-docker
-TAG?=0.1.0
+IMAGE?=rvanderfeer/remote-docker
+TAG?=0.0.1
 
 BUILDER=buildx-multi-arch
 

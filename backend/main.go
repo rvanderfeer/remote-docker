@@ -180,7 +180,7 @@ type DashboardOverview struct {
 	Networks struct {
 		Total int `json:"total"`
 	} `json:"networks"`
-	ComposeProjects struct {
+ 	ComposeProjects struct {
 		Total   int `json:"total"`
 		Running int `json:"running"`
 		Partial int `json:"partial"`
@@ -261,7 +261,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	}
 
 	// Gather container statistics - using simpler commands
-	containerCmd := "docker ps -a | wc -l && docker ps | wc -l"
+	containerCmd := "sudo docker ps -a | wc -l && sudo docker ps | wc -l"
 	containerOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, containerCmd)
 	if err != nil {
 		logger.Errorf("Error getting container stats: %v", err)
@@ -296,7 +296,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	}
 
 	// Gather image statistics - simpler approach
-	imageCmd := "docker images | wc -l"
+	imageCmd := "sudo docker images | wc -l"
 	imageOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, imageCmd)
 	if err != nil {
 		logger.Errorf("Error getting image stats: %v", err)
@@ -315,7 +315,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	}
 
 	// Gather disk usage for images (more basic approach)
-	imageSizeCmd := "docker system df | grep Images || echo 'N/A'"
+	imageSizeCmd := "sudo docker system df | grep Images || echo 'N/A'"
 	imageSizeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, imageSizeCmd)
 	imageSize := "N/A"
 	if err == nil && len(imageSizeOutput) > 0 {
@@ -329,7 +329,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	}
 
 	// Gather volume statistics
-	volumeCmd := "docker volume ls | wc -l"
+	volumeCmd := "sudo docker volume ls | wc -l"
 	volumeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, volumeCmd)
 	totalVolumes := 0
 	if err == nil && len(volumeOutput) > 0 {
@@ -340,7 +340,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	}
 
 	// Gather network statistics
-	networkCmd := "docker network ls | wc -l"
+	networkCmd := "sudo docker network ls | wc -l"
 	networkOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, networkCmd)
 	totalNetworks := 0
 	if err == nil && len(networkOutput) > 0 {
@@ -351,7 +351,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	}
 
 	// Gather compose project statistics (more tolerant approach)
-	composeCmd := "docker ps --format '{{.Labels}}' | grep -c 'com.docker.compose.project' || echo 0"
+	composeCmd := "sudo docker ps --format '{{.Labels}}' | grep -c 'com.docker.compose.project' || echo 0"
 	composeOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, composeCmd)
 	totalCompose := 0
 	if err == nil && len(composeOutput) > 0 {
@@ -389,7 +389,7 @@ func getDashboardResources(ctx echo.Context) error {
 
 	// Get container resource usage with docker stats
 	// Using a simpler format string that's more likely to work across different Docker versions
-	statsCmd := "docker stats --no-stream --format 'table {{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}' || docker stats --no-stream"
+	statsCmd := "sudo docker stats --no-stream --format 'table {{.ID}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}' || sudo docker stats --no-stream"
 	statsOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, statsCmd)
 	if err != nil {
 		logger.Errorf("Error getting resource stats: %v", err)
@@ -494,7 +494,9 @@ func getDashboardResources(ctx echo.Context) error {
 	// Get system resource usage using more basic commands that are more likely to be available
 	// First, try a simpler CPU usage check
 	cpuUsage := 0.0
-	cpuCmd := "top -bn1 | grep '%Cpu' | awk '{print 100 - $8}' || echo 0"
+	// cpuCmd := "sudo top -bn1 | grep '%Cpu' | awk '{print 100 - $8}' || echo 0"
+	cpuCmd := "sudo vmstat 1 2 | tail -1 | awk '{print 100-$15}' || echo 0"
+
 	cpuOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, cpuCmd)
 	if err == nil && len(cpuOutput) > 0 {
 		cpuUsage, _ = strconv.ParseFloat(strings.TrimSpace(string(cpuOutput)), 64)
@@ -502,7 +504,7 @@ func getDashboardResources(ctx echo.Context) error {
 
 	// Memory usage
 	memUsage := 0.0
-	memCmd := "free | grep Mem | awk '{print $3/$2 * 100}' || echo 0"
+	memCmd := "sudo free | grep Mem | awk '{print $3/$2 * 100}' || echo 0"
 	memOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, memCmd)
 	if err == nil && len(memOutput) > 0 {
 		memUsage, _ = strconv.ParseFloat(strings.TrimSpace(string(memOutput)), 64)
@@ -510,7 +512,7 @@ func getDashboardResources(ctx echo.Context) error {
 
 	// Disk usage
 	diskUsage := 0.0
-	diskCmd := "df -h / | awk 'NR==2 {print $5}' | sed 's/%//' || echo 0"
+	diskCmd := "sudo df -h / | awk 'NR==2 {print $5}' | sed 's/%//' || echo 0"
 	diskOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, diskCmd)
 	if err == nil && len(diskOutput) > 0 {
 		diskUsage, _ = strconv.ParseFloat(strings.TrimSpace(string(diskOutput)), 64)
@@ -552,14 +554,14 @@ func getDashboardSystemInfo(ctx echo.Context) error {
 	}
 
 	// Get Docker version - simple command
-	versionCmd := "docker version | grep 'Server Version' | awk '{print $3}' || echo 'Unknown'"
+	versionCmd := "sudo docker version | grep 'Server Version' | awk '{print $3}' || echo 'Unknown'"
 	versionOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, versionCmd)
 	if err == nil && len(versionOutput) > 0 {
 		info.DockerVersion = strings.TrimSpace(string(versionOutput))
 	}
 
 	// Get API version - simple command
-	apiCmd := "docker version | grep 'API version' | head -1 | awk '{print $3}' || echo 'Unknown'"
+	apiCmd := "sudo docker version | grep 'API version' | head -1 | awk '{print $3}' || echo 'Unknown'"
 	apiOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, apiCmd)
 	if err == nil && len(apiOutput) > 0 {
 		info.APIVersion = strings.TrimSpace(string(apiOutput))
@@ -597,7 +599,7 @@ func getDashboardSystemInfo(ctx echo.Context) error {
 	}
 
 	// Get Docker root directory
-	rootCmd := "docker info | grep 'Docker Root Dir' | awk '{print $4}' || echo 'Unknown'"
+	rootCmd := "sudo docker info | grep 'Docker Root Dir' | awk '{print $4}' || echo 'Unknown'"
 	rootOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, rootCmd)
 	if err == nil && len(rootOutput) > 0 {
 		info.DockerRoot = strings.TrimSpace(string(rootOutput))
@@ -611,7 +613,7 @@ func getDashboardSystemInfo(ctx echo.Context) error {
 	}
 
 	// Check if experimental mode is enabled
-	expCmd := "docker info | grep -q 'Experimental: true' && echo 'true' || echo 'false'"
+	expCmd := "sudo docker info | grep -q 'Experimental: true' && echo 'true' || echo 'false'"
 	expOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, expCmd)
 	if err == nil && len(expOutput) > 0 {
 		info.ExperimentalMode = strings.TrimSpace(string(expOutput)) == "true"
@@ -632,7 +634,7 @@ func getDashboardEvents(ctx echo.Context) error {
 	}
 
 	// Get recent Docker events (up to 20 events, simpler command)
-	eventsCmd := "docker events --format '{{json .}}' --since 24h --until 0s | tail -20 || echo '[]'"
+	eventsCmd := "sudo docker events --format '{{json .}}' --since 24h --until 0s | tail -20 || echo '[]'"
 	eventsOutput, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, eventsCmd)
 	if err != nil {
 		logger.Errorf("Error getting Docker events: %v", err)
@@ -732,7 +734,7 @@ func getContainerLogs(ctx echo.Context) error {
 
 	// Build docker logs command with appropriate options
 	dockerCmd := strings.Builder{}
-	dockerCmd.WriteString("docker logs")
+	dockerCmd.WriteString("sudo docker logs")
 
 	// Add options
 	if req.Tail > 0 {
@@ -787,7 +789,7 @@ func getComposeLogs(ctx echo.Context) error {
 
 	// Build docker logs command with appropriate options
 	dockerCmd := strings.Builder{}
-	dockerCmd.WriteString(fmt.Sprintf("docker compose -p %s logs", req.ComposeProject))
+	dockerCmd.WriteString(fmt.Sprintf("sudo docker compose -p %s logs", req.ComposeProject))
 
 	// Add options
 	if req.Tail > 0 {
@@ -1242,7 +1244,7 @@ func listVolumes(ctx echo.Context) error {
 	}
 
 	// First, get volume names and driver info
-	dockerCommand := "docker volume ls --format '{{.Name}}|{{.Driver}}'"
+	dockerCommand := "sudo docker volume ls --format '{{.Name}}|{{.Driver}}'"
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1273,7 +1275,7 @@ func listVolumes(ctx echo.Context) error {
 		driver := parts[1]
 
 		// Get detailed info about this volume
-		inspectCommand := fmt.Sprintf("docker volume inspect %s", volumeName)
+		inspectCommand := fmt.Sprintf("sudo docker volume inspect %s", volumeName)
 		inspectOutput, inspectErr := tunnelManager.ExecuteCommand(req.Username, req.Hostname, inspectCommand)
 
 		mountpoint := "N/A"
@@ -1341,7 +1343,7 @@ func removeVolume(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
-	dockerCommand := fmt.Sprintf("docker volume rm %s", req.VolumeName)
+	dockerCommand := fmt.Sprintf("sudo docker volume rm %s", req.VolumeName)
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1374,7 +1376,7 @@ func listNetworks(ctx echo.Context) error {
 	}
 
 	// Format: ID|Name|Driver|Scope
-	dockerCommand := "docker network ls --format '{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}'"
+	dockerCommand := "sudo docker network ls --format '{{.ID}}|{{.Name}}|{{.Driver}}|{{.Scope}}'"
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1407,7 +1409,7 @@ func listNetworks(ctx echo.Context) error {
 		scope := parts[3]
 
 		// Now get detailed info about this network
-		inspectCmd := fmt.Sprintf("docker network inspect %s", networkId)
+		inspectCmd := fmt.Sprintf("sudo docker network inspect %s", networkId)
 
 		// Execute command using SSH tunnel
 		inspectOutput, inspectErr := tunnelManager.ExecuteCommand(req.Username, req.Hostname, inspectCmd)
@@ -1478,7 +1480,7 @@ func removeNetwork(ctx echo.Context) error {
 	}
 
 	// SSH to remote host and remove network
-	dockerCommand := fmt.Sprintf("docker network rm %s", req.NetworkId)
+	dockerCommand := fmt.Sprintf("sudo docker network rm %s", req.NetworkId)
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1515,7 +1517,7 @@ func startContainer(ctx echo.Context) error {
 	}
 
 	// Format the docker command
-	dockerCommand := fmt.Sprintf("docker start %s", req.ContainerId)
+	dockerCommand := fmt.Sprintf("sudo docker start %s", req.ContainerId)
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1545,7 +1547,7 @@ func stopContainer(ctx echo.Context) error {
 	}
 
 	// Format the docker command
-	dockerCommand := fmt.Sprintf("docker stop %s", req.ContainerId)
+	dockerCommand := fmt.Sprintf("sudo docker stop %s", req.ContainerId)
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1578,7 +1580,7 @@ func listImages(ctx echo.Context) error {
 	}
 
 	// Format the docker command
-	dockerCommand := "docker images --format '{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedSince}}|{{.Size}}'"
+	dockerCommand := "sudo docker images --format '{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedSince}}|{{.Size}}'"
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
@@ -1695,7 +1697,7 @@ func connectToRemoteDocker(ctx echo.Context) error {
 	}
 
 	// Include Labels in docker ps
-	dockerCommand := `docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.Labels}}'`
+	dockerCommand := "sudo docker ps --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}|{{.Labels}}'"
 
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
