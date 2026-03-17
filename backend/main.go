@@ -886,6 +886,13 @@ func NewSSHTunnelManager() (*SSHTunnelManager, error) {
 		return nil, fmt.Errorf("failed to create control directory: %v", err)
 	}
 
+	// Seed writable known_hosts from the read-only mounted ~/.ssh/known_hosts
+	if data, err := os.ReadFile("/root/.ssh/known_hosts"); err == nil {
+		if err := os.WriteFile("/tmp/known_hosts", data, 0600); err != nil {
+			logger.Warnf("Failed to seed known_hosts: %v", err)
+		}
+	}
+
 	return &SSHTunnelManager{
 		activeConnections: make(map[string]*SSHConnection),
 		controlDir:        controlDir,
@@ -933,6 +940,7 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=2",
 		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile=/tmp/known_hosts",
 		"-o", "BatchMode=yes", // Non-interactive mode
 		"-N", // Don't execute any command, just forward
 		fmt.Sprintf("%s@%s", username, hostname),
@@ -952,6 +960,7 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 		"-o ConnectTimeout=5",
 		"-S", controlPath,
 		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile=/tmp/known_hosts",
 		fmt.Sprintf("%s@%s", username, hostname),
 		"echo 'Connection test'",
 	)
@@ -1086,6 +1095,7 @@ func (m *SSHTunnelManager) ExecuteCommand(username, hostname, command string) ([
 		"-o ConnectTimeout=5",
 		"-S", controlPath,
 		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile=/tmp/known_hosts",
 		fmt.Sprintf("%s@%s", username, hostname),
 		command,
 	)
@@ -1110,6 +1120,7 @@ func (m *SSHTunnelManager) IsConnectionActive(username, hostname string) bool {
 		"-o ConnectTimeout=5",
 		"-S", conn.ControlPath,
 		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile=/tmp/known_hosts",
 		fmt.Sprintf("%s@%s", username, hostname),
 		"echo 'Connection test'",
 	)
