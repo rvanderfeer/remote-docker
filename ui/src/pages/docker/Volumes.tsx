@@ -146,8 +146,8 @@ const Volumes: React.FC<VolumesProps> = ({ activeEnvironment, settings }) => {
       // Cast response to Volume array
       const volumeData = response as Volume[];
       setVolumes(volumeData);
-      setLastRefreshTime(new Date()); // Update last refresh time
-      console.log('Volumes loaded:', volumeData);
+      setLastRefreshTime(new Date());
+      console.log(`Volumes loaded: ${volumeData.length} items`);
     } catch (err: any) {
       console.error('Failed to load volumes:', err);
       setError(`Failed to load volumes: ${err.message || 'Unknown error'}`);

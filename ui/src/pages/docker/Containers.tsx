@@ -246,8 +246,8 @@ const Containers: React.FC<ContainersProps> = ({
       setComposeGroups(data.composeGroups);
       setUngroupedContainers(data.ungrouped);
 
-      setLastRefreshTime(new Date()); // Update last refresh time
-      console.log('Containers loaded:', data);
+      setLastRefreshTime(new Date());
+      console.log(`Containers loaded: ${data.composeGroups.length} groups, ${data.ungrouped.length} ungrouped`);
     } catch (err: any) {
       console.error('Failed to load containers:', err);
       setError(`Failed to load containers: ${err.message || 'Unknown error'}`);

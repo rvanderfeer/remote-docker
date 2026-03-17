@@ -27,6 +27,9 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
+const HOSTNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/;
+const USERNAME_RE = /^[a-zA-Z0-9_.-]+$/;
+
 interface EnvironmentsProps {
   settings: ExtensionSettings;
   onSaveSettings: (settings: ExtensionSettings) => Promise<boolean>;
@@ -92,6 +95,14 @@ const Environments: React.FC<EnvironmentsProps> = ({
       setError('All fields are required');
       return;
     }
+    if (!HOSTNAME_RE.test(envHostname)) {
+      setError('Hostname must contain only letters, numbers, dots, hyphens, and colons');
+      return;
+    }
+    if (!USERNAME_RE.test(envUsername)) {
+      setError('Username must contain only letters, numbers, dots, hyphens, and underscores');
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -107,7 +118,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
         environments: [...settings.environments, newEnvironment]
       };
 
-      console.log('Saving new environment:', newEnvironment);
+      console.log('Adding new environment');
       const success = await onSaveSettings(newSettings);
 
       if (success) {
@@ -130,6 +141,14 @@ const Environments: React.FC<EnvironmentsProps> = ({
       setError('All fields are required');
       return;
     }
+    if (!HOSTNAME_RE.test(envHostname)) {
+      setError('Hostname must contain only letters, numbers, dots, hyphens, and colons');
+      return;
+    }
+    if (!USERNAME_RE.test(envUsername)) {
+      setError('Username must contain only letters, numbers, dots, hyphens, and underscores');
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -147,7 +166,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
         )
       };
 
-      console.log('Updating environment:', updatedEnvironment);
+      console.log('Updating environment');
       const success = await onSaveSettings(newSettings);
 
       if (success) {
@@ -178,7 +197,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
           : settings.activeEnvironmentId
       };
 
-      console.log('Deleting environment:', currentEnvironment.id);
+      console.log('Deleting environment');
       const success = await onSaveSettings(newSettings);
 
       if (success) {
@@ -199,7 +218,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
   const handleSetActive = async (env: Environment) => {
     setIsLoading(true);
     try {
-      console.log('Setting active environment:', env.id);
+      console.log('Setting active environment');
       await onSetActiveEnvironment(env.id);
       setNotification(`${env.name} set as active environment`);
     } catch (err: any) {
@@ -219,7 +238,7 @@ const Environments: React.FC<EnvironmentsProps> = ({
         autoConnect
       };
 
-      console.log('Saving auto-connect setting:', autoConnect);
+      console.log('Saving auto-connect setting');
       const success = await onSaveSettings(newSettings);
 
       if (success) {

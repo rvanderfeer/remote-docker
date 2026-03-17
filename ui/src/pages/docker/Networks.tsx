@@ -149,8 +149,8 @@ const Networks: React.FC<NetworksProps> = ({ activeEnvironment, settings }) => {
       // Cast response to Network array
       const networkData = response as Network[];
       setNetworks(networkData);
-      setLastRefreshTime(new Date()); // Update last refresh time
-      console.log('Networks loaded:', networkData);
+      setLastRefreshTime(new Date());
+      console.log(`Networks loaded: ${networkData.length} items`);
     } catch (err: any) {
       console.error('Failed to load networks:', err);
       setError(`Failed to load networks: ${err.message || 'Unknown error'}`);

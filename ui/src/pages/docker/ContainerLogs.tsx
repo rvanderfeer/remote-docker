@@ -55,45 +55,47 @@ const CONTAINER_COLORS = [
 ];
 
 /**
- * Pattern-based log highlighting
- * Recognizes levels (INFO, WARN, ERROR), HTTP methods/status,
- * as well as known app messages (Spring, NATS, etc.),
- * and timestamps with fractional seconds + optional trailing 'Z'.
+ * Escape HTML special characters to prevent XSS.
+ * Applied to all untrusted content (log lines, container names) before
+ * inserting into HTML strings used with dangerouslySetInnerHTML.
+ */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Pattern-based log highlighting.
+ * Input is HTML-escaped first to prevent XSS from malicious log output.
+ * The regex replacements only inject safe, fixed CSS class names.
  */
 function colorizeLog(line: string): string {
+  let escaped = escapeHtml(line);
+
   const patterns: { regex: RegExp; className: string }[] = [
-    // Common log levels
     { regex: /\b(INFO|DEBUG|TRACE)\b/, className: 'log-info' },
     { regex: /\b(WARN)\b/, className: 'log-warn' },
     { regex: /\b(ERROR|FATAL|CRITICAL)\b/, className: 'log-error' },
-
-    // HTTP methods/statuses
     { regex: /\b(HTTP\/\d\.\d|\bGET\b|\bPOST\b|\bPUT\b|\bDELETE\b)\b/, className: 'log-http' },
     {
       regex: /\b(200 OK|301 Moved|302 Found|400 Bad Request|403 Forbidden|404 Not Found|500 Internal Server Error)\b/,
       className: 'log-http-status'
     },
-
-    // NATS
     { regex: /\b(NATS Connected|NATS Disconnected|NATS Error)\b/, className: 'log-nats' },
-
-    // Spring Boot / Hibernate
     { regex: /\b(Spring Boot started|Spring Context Loaded|Hibernate Initialized)\b/, className: 'log-spring' },
-
-    // Nginx
     { regex: /\b(nginx error|nginx started|nginx stopped)\b/, className: 'log-nginx' },
-
-    // DB / Connection
     { regex: /\b(connection refused|database error|timeout)\b/, className: 'log-db' },
-
-    // Timestamps (supports fractional seconds and optional trailing 'Z')
     { regex: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z?/, className: 'log-timestamp' },
   ];
 
   patterns.forEach(({ regex, className }) => {
-    line = line.replace(regex, (match) => `<span class="${className}">${match}</span>`);
+    escaped = escaped.replace(regex, (match) => `<span class="${className}">${match}</span>`);
   });
-  return line;
+  return escaped;
 }
 
 const ContainerLogs: React.FC<ContainerLogsProps> = ({
@@ -228,22 +230,20 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
 
       // Decide which endpoint to call
       let endpoint = '';
-      let payload: any = {
+      let payload: Record<string, string | number | boolean> = {
         hostname: activeEnvironment.hostname,
-        username: activeEnvironment.username
+        username: activeEnvironment.username,
+        tail: tailLines,
+        timestamps: true,
       };
 
       if (logsType === 'container') {
         endpoint = '/container/logs';
         payload.containerId = resourceId;
       } else {
-        // Compose logs
         endpoint = '/compose/logs';
         payload.composeProject = resourceId;
       }
-
-      payload.tail = tailLines;
-      payload.timestamps = true;
 
       const response = (await ddClient.extension.vm.service.post(endpoint, payload)) as ContainerLogsResponse;
 
@@ -393,9 +393,9 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     // We'll parse out the timestamp from the log text
     const match = remainder.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)(?:\s+(.*))?$/);
     if (!match) {
-      // If it doesn't match, you might have lines without timestamps
-      // or different formatting. We fallback to a "now" timestamp
-      throw new Error(`Failed to parse line: ${line}`);
+      // Lines without timestamps or with unexpected formatting are skipped.
+      // The caller's .filter() handles null returns.
+      return null;
     }
 
     const timestampStr = match[1];  // e.g. "2025-02-27T12:34:56.123Z"
@@ -413,10 +413,9 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
   const increaseFontSize = () => setLogFontSize((prev) => Math.min(prev + 0.1, 2));
   const decreaseFontSize = () => setLogFontSize((prev) => Math.max(prev - 0.1, 0.5));
 
-  const handleKeyDownForInput = (e: any) => {
+  const handleKeyDownForInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      // triggers handleBlur
-      e.target.blur();
+      e.currentTarget.blur();
     }
   };
 
@@ -433,9 +432,8 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
     setTempTailLines(numericValue);
   };
 
-  const handleChangeForInput = (e: any) => {
-    // Keep track of user input in local state.
-    setTempTailLines(e.target.value);
+  const handleChangeForInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTempTailLines(Number(e.target.value) || 0);
   };
 
 
@@ -461,13 +459,10 @@ const ContainerLogs: React.FC<ContainerLogsProps> = ({
 
       const idx = lineObj.rawLine.indexOf('|');
       if (idx === -1) {
-        // no pipe found, just color the containerName
-        // e.g. if line was just "service-1" with no logs
-        return `<span style="color: ${color}; font-weight: bold;">${cname}</span> ${lineObj.rawLine}`;
+        return `<span style="color: ${color}; font-weight: bold;">${escapeHtml(cname)}</span> ${escapeHtml(lineObj.rawLine)}`;
       } else {
-        // everything after '|'
         const remainder = lineObj.rawLine.slice(idx + 1).trimStart();
-        return `<span style="color: ${color}; font-weight: bold;">${cname}</span> | ${remainder}`;
+        return `<span style="color: ${color}; font-weight: bold;">${escapeHtml(cname)}</span> | ${escapeHtml(remainder)}`;
       }
     });
 

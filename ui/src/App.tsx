@@ -89,11 +89,9 @@ export function App() {
     autoConnect: false,
   });
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
 
   // New state for SSH tunnel management
   const [isTunnelActive, setIsTunnelActive] = useState(false);
-  const [tunnelError, setTunnelError] = useState('');
   const [isTunnelLoading, setIsTunnelLoading] = useState(false);
   const visibilityRef = useRef(true);
 
@@ -156,7 +154,7 @@ export function App() {
       }
 
       setSettings(parsedSettings);
-      console.log('Settings loaded:', parsedSettings);
+      console.log('Settings loaded successfully');
 
       // Check if we have an active environment and if so, open its tunnel
       if (parsedSettings.activeEnvironmentId) {
@@ -169,7 +167,6 @@ export function App() {
       }
     } catch (err: any) {
       console.error('Failed to load settings:', err);
-      setError('Failed to load settings: ' + (err.message || 'Unknown error'));
       ddClient.desktopUI.toast.error('Failed to load settings: ' + (err.message || 'Unknown error'));
       // Initialize with empty settings if loading fails
       setSettings({
@@ -195,7 +192,7 @@ export function App() {
 
       if (success) {
         setSettings(newSettings);
-        console.log('Settings saved successfully:', newSettings);
+        console.log('Settings saved successfully');
         return true;
       } else {
         console.error('Failed to save settings, unexpected response:', response);
@@ -203,7 +200,6 @@ export function App() {
       }
     } catch (err: any) {
       console.error('Failed to save settings:', err);
-      setError('Failed to save settings: ' + (err.message || 'Unknown error'));
       ddClient.desktopUI.toast.error('Failed to save settings: ' + (err.message || 'Unknown error'));
       return false;
     }
@@ -226,7 +222,6 @@ export function App() {
 
     setIsTunnelLoading(true);
     try {
-      setTunnelError('');
       const response = await ddClient.extension.vm?.service?.post('/tunnel/open', {
         hostname: env.hostname,
         username: env.username
@@ -234,13 +229,12 @@ export function App() {
 
       if (response && response.success === "true") {
         setIsTunnelActive(true);
-        console.log(`SSH tunnel opened for ${env.username}@${env.hostname}`);
+        console.log(`SSH tunnel opened for ${env.hostname}`);
       } else {
         throw new Error((response && response.error) || 'Unknown error opening SSH tunnel');
       }
     } catch (err: any) {
       console.error('Failed to open SSH tunnel:', err);
-      setTunnelError(`Failed to open SSH tunnel: ${err.message || 'Unknown error'}`);
       ddClient.desktopUI.toast.error('Failed to open SSH tunnel: ' + (err.message || 'Unknown error'));
       setIsTunnelActive(false);
     } finally {
@@ -260,7 +254,7 @@ export function App() {
 
       if (response && response.success === "true") {
         setIsTunnelActive(false);
-        console.log(`SSH tunnel closed for ${env.username}@${env.hostname}`);
+        console.log(`SSH tunnel closed for ${env.hostname}`);
       }
     } catch (err: any) {
       console.error('Failed to close SSH tunnel:', err);
@@ -279,7 +273,8 @@ export function App() {
     if (!env) return;
 
     try {
-      const response = await ddClient.extension.vm?.service?.get(`/tunnel/status?username=${env.username}&hostname=${env.hostname}`);
+      const params = new URLSearchParams({ username: env.username, hostname: env.hostname });
+      const response = await ddClient.extension.vm?.service?.get(`/tunnel/status?${params}`);
 
       if (response && typeof response === 'object') {
         const typedResponse = response as TunnelStatusResponse;
@@ -621,9 +616,10 @@ export function App() {
                 </ListItemIcon>
                 <ListItemText
                   primary={item.label}
-                  primaryTypographyProps={{
-                    fontSize: '0.875rem',
-                    fontWeight: currentPage === item.key ? 500 : 400
+                  slotProps={{
+                    primary: {
+                      sx: { fontSize: '0.875rem', fontWeight: currentPage === item.key ? 500 : 400 }
+                    }
                   }}
                 />
               </ListItemButton>
@@ -655,9 +651,10 @@ export function App() {
                 </ListItemIcon>
                 <ListItemText
                   primary={item.label}
-                  primaryTypographyProps={{
-                    fontSize: '0.875rem',
-                    fontWeight: currentPage === item.key ? 500 : 400
+                  slotProps={{
+                    primary: {
+                      sx: { fontSize: '0.875rem', fontWeight: currentPage === item.key ? 500 : 400 }
+                    }
                   }}
                 />
               </ListItemButton>

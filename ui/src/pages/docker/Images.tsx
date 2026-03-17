@@ -154,8 +154,8 @@ const Images: React.FC<ImagesProps> = ({ activeEnvironment, settings }) => {
       // Cast response to Image array
       const imageData = response as Image[];
       setImages(imageData);
-      setLastRefreshTime(new Date()); // Update last refresh time
-      console.log('Images loaded:', imageData);
+      setLastRefreshTime(new Date());
+      console.log(`Images loaded: ${imageData.length} items`);
     } catch (err: any) {
       console.error('Failed to load images:', err);
       setError(`Failed to load images: ${err.message || 'Unknown error'}`);

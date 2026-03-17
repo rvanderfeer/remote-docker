@@ -659,7 +659,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             outerRadius={80}
             dataKey="value"
             labelLine={true}
-            label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+            label={({ name, percent }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
           >
             {data.map((entry, index) => (
               <Cell key={`cell-${index}`} fill={entry.fill} />
