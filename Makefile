@@ -25,10 +25,10 @@ run-client: ## Run the client
 	npm --prefix ui install && npm --prefix ui run dev
 
 set-extension-source: ## Set Docker extension dev source
-	docker extension dev ui-source egekocabas/remote-docker:latest http://localhost:3000
+	docker extension dev ui-source $(IMAGE):latest http://localhost:3000
 
 debug-ui: ## Debug the UI
-	docker extension dev debug egekocabas/remote-docker:latest
+	docker extension dev debug $(IMAGE):latest
 
 validate-extension: ## Validate the extension
 	docker extension validate $(IMAGE):$(TAG)

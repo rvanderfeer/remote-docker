@@ -4,16 +4,19 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -24,7 +27,48 @@ import (
 var (
 	logger        = logrus.New()
 	tunnelManager *SSHTunnelManager
+
+	// Input validation patterns
+	validUsername    = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+	validHostname   = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]*$`)
+	validResourceID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 )
+
+func validateUsername(s string) error {
+	if !validUsername.MatchString(s) {
+		return fmt.Errorf("invalid username format")
+	}
+	return nil
+}
+
+func validateHostname(s string) error {
+	if !validHostname.MatchString(s) {
+		return fmt.Errorf("invalid hostname format")
+	}
+	return nil
+}
+
+func validateResourceID(s string) error {
+	if !validResourceID.MatchString(s) {
+		return fmt.Errorf("invalid resource ID format")
+	}
+	return nil
+}
+
+func validateConnectionFields(username, hostname string) error {
+	if username == "" || hostname == "" {
+		return fmt.Errorf("missing required fields")
+	}
+	if err := validateUsername(username); err != nil {
+		return err
+	}
+	return validateHostname(hostname)
+}
+
+// shellQuote wraps a value in single quotes for safe shell interpolation (defense-in-depth).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
 
 // SSH tunnel manager that maintains persistent connections
 type SSHTunnelManager struct {
@@ -152,6 +196,7 @@ func main() {
 
 	// Graceful shutdown handling
 	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-c
 		logger.Info("Shutting down, closing all SSH connections...")
@@ -255,9 +300,8 @@ func getDashboardOverview(ctx echo.Context) error {
 	if err := ctx.Bind(&req); err != nil {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
-
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Gather container statistics - using simpler commands
@@ -266,7 +310,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error getting container stats: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get container statistics: %v", err),
+			"error": "Failed to get container statistics",
 		})
 	}
 
@@ -301,7 +345,7 @@ func getDashboardOverview(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error getting image stats: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get image statistics: %v", err),
+			"error": "Failed to get image statistics",
 		})
 	}
 
@@ -383,8 +427,8 @@ func getDashboardResources(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Get container resource usage with docker stats
@@ -394,7 +438,7 @@ func getDashboardResources(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error getting resource stats: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to get resource statistics: %v", err),
+			"error": "Failed to get resource statistics",
 		})
 	}
 
@@ -536,8 +580,8 @@ func getDashboardSystemInfo(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Create a response with defaults
@@ -629,8 +673,8 @@ func getDashboardEvents(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Get recent Docker events (up to 20 events, simpler command)
@@ -728,24 +772,28 @@ func getContainerLogs(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" || req.ContainerId == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if req.ContainerId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing container ID"})
+	}
+	if err := validateResourceID(req.ContainerId); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid container ID format"})
 	}
 
 	// Build docker logs command with appropriate options
-	dockerCmd := strings.Builder{}
+	var dockerCmd strings.Builder
 	dockerCmd.WriteString("sudo docker logs")
 
-	// Add options
 	if req.Tail > 0 {
-		dockerCmd.WriteString(fmt.Sprintf(" --tail %d", req.Tail))
+		fmt.Fprintf(&dockerCmd, " --tail %d", req.Tail)
 	}
 	if req.Timestamps {
 		dockerCmd.WriteString(" --timestamps")
 	}
 
-	// Add container ID
-	dockerCmd.WriteString(fmt.Sprintf(" %s", req.ContainerId))
+	fmt.Fprintf(&dockerCmd, " %s", shellQuote(req.ContainerId))
 
 	logger.Infof("Executing log command: %s", dockerCmd.String())
 
@@ -754,8 +802,7 @@ func getContainerLogs(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error reading logs: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to read logs: %v", err),
-			"output": string(output),
+			"error": "Failed to read logs",
 		})
 	}
 
@@ -783,17 +830,22 @@ func getComposeLogs(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" || req.ComposeProject == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if req.ComposeProject == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing compose project name"})
+	}
+	if err := validateResourceID(req.ComposeProject); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid compose project name format"})
 	}
 
-	// Build docker logs command with appropriate options
-	dockerCmd := strings.Builder{}
-	dockerCmd.WriteString(fmt.Sprintf("sudo docker compose -p %s logs", req.ComposeProject))
+	// Build docker compose logs command with appropriate options
+	var dockerCmd strings.Builder
+	fmt.Fprintf(&dockerCmd, "sudo docker compose -p %s logs", shellQuote(req.ComposeProject))
 
-	// Add options
 	if req.Tail > 0 {
-		dockerCmd.WriteString(fmt.Sprintf(" --tail %d", req.Tail))
+		fmt.Fprintf(&dockerCmd, " --tail %d", req.Tail)
 	}
 	if req.Timestamps {
 		dockerCmd.WriteString(" --timestamps")
@@ -806,8 +858,7 @@ func getComposeLogs(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error reading logs: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to read logs: %v", err),
-			"output": string(output),
+			"error": "Failed to read logs",
 		})
 	}
 
@@ -861,8 +912,11 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 		return nil
 	}
 
-	// Create control socket path
+	// Create control socket path and guard against path traversal
 	controlPath := filepath.Join(m.controlDir, fmt.Sprintf("ssh-%s.sock", key))
+	if !strings.HasPrefix(filepath.Clean(controlPath), m.controlDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid connection key: path traversal detected")
+	}
 
 	// Remove existing control socket if it exists
 	if _, err := os.Stat(controlPath); err == nil {
@@ -878,7 +932,7 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 		"-o", "ControlPersist=yes",
 		"-o", "ServerAliveInterval=10",
 		"-o", "ServerAliveCountMax=2",
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "StrictHostKeyChecking=yes",
 		"-o", "BatchMode=yes", // Non-interactive mode
 		"-N", // Don't execute any command, just forward
 		fmt.Sprintf("%s@%s", username, hostname),
@@ -897,7 +951,7 @@ func (m *SSHTunnelManager) OpenConnection(username, hostname string) error {
 	testCmd := exec.Command("ssh",
 		"-o ConnectTimeout=5",
 		"-S", controlPath,
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "StrictHostKeyChecking=yes",
 		fmt.Sprintf("%s@%s", username, hostname),
 		"echo 'Connection test'",
 	)
@@ -1016,6 +1070,10 @@ func (m *SSHTunnelManager) ExecuteCommand(username, hostname, command string) ([
 		}
 		m.mutex.Lock()
 		conn = m.activeConnections[key]
+		if conn == nil {
+			m.mutex.Unlock()
+			return nil, fmt.Errorf("connection was closed during reconnect")
+		}
 	}
 
 	// Update last used time
@@ -1027,7 +1085,7 @@ func (m *SSHTunnelManager) ExecuteCommand(username, hostname, command string) ([
 	cmd := exec.Command("ssh",
 		"-o ConnectTimeout=5",
 		"-S", controlPath,
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "StrictHostKeyChecking=yes",
 		fmt.Sprintf("%s@%s", username, hostname),
 		command,
 	)
@@ -1051,7 +1109,7 @@ func (m *SSHTunnelManager) IsConnectionActive(username, hostname string) bool {
 	testCmd := exec.Command("ssh",
 		"-o ConnectTimeout=5",
 		"-S", conn.ControlPath,
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "StrictHostKeyChecking=yes",
 		fmt.Sprintf("%s@%s", username, hostname),
 		"echo 'Connection test'",
 	)
@@ -1144,15 +1202,15 @@ func openTunnel(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Open SSH tunnel
 	if err := tunnelManager.OpenConnection(req.Username, req.Hostname); err != nil {
 		logger.Errorf("Failed to open SSH tunnel: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to open SSH tunnel: %v", err),
+			"error": "Failed to open SSH tunnel",
 		})
 	}
 
@@ -1169,15 +1227,15 @@ func closeTunnel(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Close SSH tunnel
 	if err := tunnelManager.CloseConnection(req.Username, req.Hostname); err != nil {
 		logger.Errorf("Failed to close SSH tunnel: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": fmt.Sprintf("Failed to close SSH tunnel: %v", err),
+			"error": "Failed to close SSH tunnel",
 		})
 	}
 
@@ -1192,13 +1250,13 @@ func getTunnelStatus(ctx echo.Context) error {
 	username := ctx.QueryParam("username")
 	hostname := ctx.QueryParam("hostname")
 
-	if username == "" || hostname == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing username or hostname"})
+	if err := validateConnectionFields(username, hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	isActive := tunnelManager.IsConnectionActive(username, hostname)
 
-	return ctx.JSON(http.StatusOK, map[string]interface{}{
+	return ctx.JSON(http.StatusOK, map[string]any{
 		"active":     isActive,
 		"connection": fmt.Sprintf("%s@%s", username, hostname),
 	})
@@ -1208,7 +1266,7 @@ func getTunnelStatus(ctx echo.Context) error {
 func listTunnels(ctx echo.Context) error {
 	activeConnections := tunnelManager.GetActiveConnections()
 
-	return ctx.JSON(http.StatusOK, map[string]interface{}{
+	return ctx.JSON(http.StatusOK, map[string]any{
 		"active_tunnels": activeConnections,
 	})
 }
@@ -1239,8 +1297,8 @@ func listVolumes(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// First, get volume names and driver info
@@ -1251,14 +1309,13 @@ func listVolumes(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error listing volumes: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to list volumes: %v", err),
-			"output": string(output),
+			"error": "Failed to list volumes",
 		})
 	}
 
 	// Parse the output into volume objects
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	volumes := make([]map[string]interface{}, 0, len(lines))
+	volumes := make([]map[string]any, 0, len(lines))
 
 	for _, line := range lines {
 		if line == "" {
@@ -1274,51 +1331,41 @@ func listVolumes(ctx echo.Context) error {
 		volumeName := parts[0]
 		driver := parts[1]
 
+		// Validate volume name from remote output before re-using in command
+		if validateResourceID(volumeName) != nil {
+			logger.Warnf("Skipping volume with invalid name: %s", volumeName)
+			continue
+		}
+
 		// Get detailed info about this volume
-		inspectCommand := fmt.Sprintf("sudo docker volume inspect %s", volumeName)
+		inspectCommand := fmt.Sprintf("sudo docker volume inspect %s", shellQuote(volumeName))
 		inspectOutput, inspectErr := tunnelManager.ExecuteCommand(req.Username, req.Hostname, inspectCommand)
 
 		mountpoint := "N/A"
 		created := "N/A"
 		labels := []string{}
 
-		// If we can get inspect data, extract more info
 		if inspectErr == nil && len(inspectOutput) > 0 {
-			// Simple parsing approach - in production you'd want to properly parse JSON
-			inspectStr := string(inspectOutput)
-
-			// Extract mountpoint
-			if mountStart := strings.Index(inspectStr, "\"Mountpoint\": \""); mountStart > 0 {
-				mountStart += 15 // Length of "Mountpoint": "
-				if mountEnd := strings.Index(inspectStr[mountStart:], "\""); mountEnd > 0 {
-					mountpoint = inspectStr[mountStart : mountStart+mountEnd]
-				}
+			var volumeInspect []struct {
+				Mountpoint string            `json:"Mountpoint"`
+				CreatedAt  string            `json:"CreatedAt"`
+				Labels     map[string]string `json:"Labels"`
 			}
-
-			// Extract creation time if available
-			if createdStart := strings.Index(inspectStr, "\"CreatedAt\": \""); createdStart > 0 {
-				createdStart += 14 // Length of "CreatedAt": "
-				if createdEnd := strings.Index(inspectStr[createdStart:], "\""); createdEnd > 0 {
-					created = inspectStr[createdStart : createdStart+createdEnd]
+			if err := json.Unmarshal(inspectOutput, &volumeInspect); err == nil && len(volumeInspect) > 0 {
+				v := volumeInspect[0]
+				if v.Mountpoint != "" {
+					mountpoint = v.Mountpoint
 				}
-			}
-
-			// Extract labels
-			if labelsStart := strings.Index(inspectStr, "\"Labels\": {"); labelsStart > 0 {
-				labelsStart += 11 // Length of "Labels": {
-				if labelsEnd := strings.Index(inspectStr[labelsStart:], "}"); labelsEnd > 0 {
-					labelsSection := inspectStr[labelsStart : labelsStart+labelsEnd]
-					labelPairs := strings.Split(labelsSection, ",")
-					for _, pair := range labelPairs {
-						if pair = strings.TrimSpace(pair); pair != "" {
-							labels = append(labels, pair)
-						}
-					}
+				if v.CreatedAt != "" {
+					created = v.CreatedAt
+				}
+				for k, val := range v.Labels {
+					labels = append(labels, fmt.Sprintf("%s=%s", k, val))
 				}
 			}
 		}
 
-		volume := map[string]interface{}{
+		volume := map[string]any{
 			"name":       volumeName,
 			"driver":     driver,
 			"mountpoint": mountpoint,
@@ -1339,19 +1386,24 @@ func removeVolume(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" || req.VolumeName == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if req.VolumeName == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing volume name"})
+	}
+	if err := validateResourceID(req.VolumeName); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid volume name format"})
 	}
 
-	dockerCommand := fmt.Sprintf("sudo docker volume rm %s", req.VolumeName)
+	dockerCommand := fmt.Sprintf("sudo docker volume rm %s", shellQuote(req.VolumeName))
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error removing volume: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to remove volume: %v", err),
-			"output": string(output),
+			"error": "Failed to remove volume",
 		})
 	}
 
@@ -1371,8 +1423,8 @@ func listNetworks(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Format: ID|Name|Driver|Scope
@@ -1383,14 +1435,13 @@ func listNetworks(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error listing networks: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to list networks: %v", err),
-			"output": string(output),
+			"error": "Failed to list networks",
 		})
 	}
 
 	// Parse the output into network objects
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	networks := make([]map[string]interface{}, 0, len(lines))
+	networks := make([]map[string]any, 0, len(lines))
 
 	for _, line := range lines {
 		if line == "" {
@@ -1408,8 +1459,14 @@ func listNetworks(ctx echo.Context) error {
 		driver := parts[2]
 		scope := parts[3]
 
+		// Validate network ID from remote output before re-using in command
+		if validateResourceID(networkId) != nil {
+			logger.Warnf("Skipping network with invalid ID: %s", networkId)
+			continue
+		}
+
 		// Now get detailed info about this network
-		inspectCmd := fmt.Sprintf("sudo docker network inspect %s", networkId)
+		inspectCmd := fmt.Sprintf("sudo docker network inspect %s", shellQuote(networkId))
 
 		// Execute command using SSH tunnel
 		inspectOutput, inspectErr := tunnelManager.ExecuteCommand(req.Username, req.Hostname, inspectCmd)
@@ -1419,40 +1476,31 @@ func listNetworks(ctx echo.Context) error {
 		ipamDriver := "default"
 		internal := false
 
-		// If we can get inspect data, extract more info
 		if inspectErr == nil && len(inspectOutput) > 0 {
-			// Simple parsing approach - in production you'd want to properly parse JSON
-			inspectStr := string(inspectOutput)
-
-			// Extract IPAM driver
-			if driverStart := strings.Index(inspectStr, "\"Driver\": \""); driverStart > 0 {
-				driverStart += 11 // Length of "Driver": "
-				if driverEnd := strings.Index(inspectStr[driverStart:], "\""); driverEnd > 0 {
-					ipamDriver = inspectStr[driverStart : driverStart+driverEnd]
+			var networkInspect []struct {
+				Internal bool `json:"Internal"`
+				IPAM     struct {
+					Driver string `json:"Driver"`
+					Config []struct {
+						Subnet  string `json:"Subnet"`
+						Gateway string `json:"Gateway"`
+					} `json:"Config"`
+				} `json:"IPAM"`
+			}
+			if err := json.Unmarshal(inspectOutput, &networkInspect); err == nil && len(networkInspect) > 0 {
+				n := networkInspect[0]
+				internal = n.Internal
+				if n.IPAM.Driver != "" {
+					ipamDriver = n.IPAM.Driver
+				}
+				if len(n.IPAM.Config) > 0 {
+					subnet = n.IPAM.Config[0].Subnet
+					gateway = n.IPAM.Config[0].Gateway
 				}
 			}
-
-			// Extract subnet
-			if subnetStart := strings.Index(inspectStr, "\"Subnet\": \""); subnetStart > 0 {
-				subnetStart += 11 // Length of "Subnet": "
-				if subnetEnd := strings.Index(inspectStr[subnetStart:], "\""); subnetEnd > 0 {
-					subnet = inspectStr[subnetStart : subnetStart+subnetEnd]
-				}
-			}
-
-			// Extract gateway
-			if gatewayStart := strings.Index(inspectStr, "\"Gateway\": \""); gatewayStart > 0 {
-				gatewayStart += 12 // Length of "Gateway": "
-				if gatewayEnd := strings.Index(inspectStr[gatewayStart:], "\""); gatewayEnd > 0 {
-					gateway = inspectStr[gatewayStart : gatewayStart+gatewayEnd]
-				}
-			}
-
-			// Check if internal
-			internal = strings.Contains(inspectStr, "\"Internal\": true")
 		}
 
-		network := map[string]interface{}{
+		network := map[string]any{
 			"id":         networkId,
 			"name":       name,
 			"driver":     driver,
@@ -1475,20 +1523,25 @@ func removeNetwork(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" || req.NetworkId == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if req.NetworkId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing network ID"})
+	}
+	if err := validateResourceID(req.NetworkId); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid network ID format"})
 	}
 
 	// SSH to remote host and remove network
-	dockerCommand := fmt.Sprintf("sudo docker network rm %s", req.NetworkId)
+	dockerCommand := fmt.Sprintf("sudo docker network rm %s", shellQuote(req.NetworkId))
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error removing network: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to remove network: %v", err),
-			"output": string(output),
+			"error": "Failed to remove network",
 		})
 	}
 
@@ -1512,20 +1565,25 @@ func startContainer(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" || req.ContainerId == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if req.ContainerId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing container ID"})
+	}
+	if err := validateResourceID(req.ContainerId); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid container ID format"})
 	}
 
 	// Format the docker command
-	dockerCommand := fmt.Sprintf("sudo docker start %s", req.ContainerId)
+	dockerCommand := fmt.Sprintf("sudo docker start %s", shellQuote(req.ContainerId))
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error starting container: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to start container: %v", err),
-			"output": string(output),
+			"error": "Failed to start container",
 		})
 	}
 
@@ -1542,20 +1600,25 @@ func stopContainer(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" || req.ContainerId == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if req.ContainerId == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing container ID"})
+	}
+	if err := validateResourceID(req.ContainerId); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid container ID format"})
 	}
 
 	// Format the docker command
-	dockerCommand := fmt.Sprintf("sudo docker stop %s", req.ContainerId)
+	dockerCommand := fmt.Sprintf("sudo docker stop %s", shellQuote(req.ContainerId))
 
 	// Execute command using SSH tunnel
 	output, err := tunnelManager.ExecuteCommand(req.Username, req.Hostname, dockerCommand)
 	if err != nil {
 		logger.Errorf("Error stopping container: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to stop container: %v", err),
-			"output": string(output),
+			"error": "Failed to stop container",
 		})
 	}
 
@@ -1575,8 +1638,8 @@ func listImages(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Format the docker command
@@ -1587,8 +1650,7 @@ func listImages(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error listing images: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to list images: %v", err),
-			"output": string(output),
+			"error": "Failed to list images",
 		})
 	}
 
@@ -1628,8 +1690,8 @@ func getSettings(ctx echo.Context) error {
 	// Check if settings file exists
 	if _, err := os.Stat(settingsFilePath); os.IsNotExist(err) {
 		// Return default settings if no settings exist yet
-		defaultSettings := map[string]interface{}{
-			"environments": []interface{}{},
+		defaultSettings := map[string]any{
+			"environments": []any{},
 			"autoConnect":  false,
 		}
 		jsonData, _ := json.Marshal(defaultSettings)
@@ -1637,7 +1699,7 @@ func getSettings(ctx echo.Context) error {
 	}
 
 	// Read settings file
-	data, err := ioutil.ReadFile(settingsFilePath)
+	data, err := os.ReadFile(settingsFilePath)
 	if err != nil {
 		logger.Errorf("Error reading settings: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
@@ -1652,7 +1714,7 @@ func getSettings(ctx echo.Context) error {
 // Save settings to file
 func saveSettings(ctx echo.Context) error {
 	// Read request body
-	body, err := ioutil.ReadAll(ctx.Request().Body)
+	body, err := io.ReadAll(ctx.Request().Body)
 	if err != nil {
 		logger.Errorf("Error reading request body: %v", err)
 		return ctx.JSON(http.StatusBadRequest, map[string]string{
@@ -1661,7 +1723,7 @@ func saveSettings(ctx echo.Context) error {
 	}
 
 	// Validate JSON
-	var jsonData interface{}
+	var jsonData any
 	if err := json.Unmarshal(body, &jsonData); err != nil {
 		logger.Errorf("Invalid JSON: %v", err)
 		return ctx.JSON(http.StatusBadRequest, map[string]string{
@@ -1673,7 +1735,7 @@ func saveSettings(ctx echo.Context) error {
 	os.MkdirAll(filepath.Dir(settingsFilePath), 0755)
 
 	// Write settings to file
-	if err := ioutil.WriteFile(settingsFilePath, body, 0644); err != nil {
+	if err := os.WriteFile(settingsFilePath, body, 0644); err != nil {
 		logger.Errorf("Error writing settings: %v", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to save settings",
@@ -1692,8 +1754,8 @@ func connectToRemoteDocker(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	if req.Hostname == "" || req.Username == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	if err := validateConnectionFields(req.Username, req.Hostname); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 
 	// Include Labels in docker ps
@@ -1703,8 +1765,7 @@ func connectToRemoteDocker(ctx echo.Context) error {
 	if err != nil {
 		logger.Errorf("Error executing SSH command: %v, output: %s", err, string(output))
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error":  fmt.Sprintf("Failed to connect: %v", err),
-			"output": string(output),
+			"error": "Failed to connect",
 		})
 	}
 
@@ -1801,9 +1862,8 @@ func parseComposeProjectLabel(labels string) string {
 	pairs := strings.Split(labels, ",")
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
-		if strings.HasPrefix(pair, "com.docker.compose.project=") {
-			// Extract everything after =
-			return strings.TrimPrefix(pair, "com.docker.compose.project=")
+		if v, ok := strings.CutPrefix(pair, "com.docker.compose.project="); ok {
+			return v
 		}
 	}
 	return ""
